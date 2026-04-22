@@ -18,6 +18,8 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrUserExists         = errors.New("user already exists")
 	ErrBadInput           = errors.New("bad input")
+	ErrUserNotFound       = errors.New("user not found")
+	ErrWrongPassword      = errors.New("wrong password")
 )
 
 type Service struct {
@@ -33,7 +35,7 @@ func NewService(userStore store.UserStore) *Service {
 	}
 }
 
-func (s *Service) Register(username, password, firstName, lastName, avatarHex string) error {
+func (s *Service) Register(username, password, firstName, lastName, avatarHex, avatarData string) error {
 	username = strings.TrimSpace(username)
 	if username == "" || password == "" {
 		return ErrBadInput
@@ -47,13 +49,14 @@ func (s *Service) Register(username, password, firstName, lastName, avatarHex st
 	}
 
 	user := store.User{
-		Username:  username,
-		FirstName: firstName,
-		LastName:  lastName,
-		AvatarHex: avatarHex,
-		Salt:      salt,
-		Hash:      hashPassword(password, salt),
-		CreatedAt: time.Now().UTC(),
+		Username:   username,
+		FirstName:  firstName,
+		LastName:   lastName,
+		AvatarHex:  avatarHex,
+		AvatarData: avatarData,
+		Salt:       salt,
+		Hash:       hashPassword(password, salt),
+		CreatedAt:  time.Now().UTC(),
 	}
 	if err := s.users.Create(context.Background(), user); err != nil {
 		if errors.Is(err, store.ErrUserExists) {
@@ -73,17 +76,17 @@ func (s *Service) Login(username, password string) (string, error) {
 	rec, err := s.users.Get(context.Background(), username)
 	if err != nil {
 		if errors.Is(err, store.ErrUserNotFound) {
-			return "", ErrInvalidCredentials
+			return "", ErrUserNotFound
 		}
 		return "", err
 	}
 	if rec.Username == "" {
-		return "", ErrInvalidCredentials
+		return "", ErrUserNotFound
 	}
 
 	hash := hashPassword(password, rec.Salt)
 	if subtle.ConstantTimeCompare(hash, rec.Hash) != 1 {
-		return "", ErrInvalidCredentials
+		return "", ErrWrongPassword
 	}
 
 	token, err := newToken()

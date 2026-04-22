@@ -1,0 +1,648 @@
+package grpcapi
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"testing"
+	"time"
+
+	messengerv1 "messenger/gen/messenger/v1"
+	"messenger/internal/auth"
+	"messenger/internal/store"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/emptypb"
+)
+
+const bufSize = 1024 * 1024
+
+func TestServerAuthAndProfileFlow(t *testing.T) {
+	t.Parallel()
+
+	authClient, userClient, _, cleanup := newTestClients(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	if _, err := authClient.Register(ctx, &messengerv1.RegisterRequest{
+		Username:  "alice",
+		Password:  "secret",
+		FirstName: "Alice",
+		LastName:  "Doe",
+	}); err != nil {
+		t.Fatalf("Register(alice) error = %v", err)
+	}
+	if _, err := authClient.Register(ctx, &messengerv1.RegisterRequest{
+		Username:  "bob",
+		Password:  "secret",
+		FirstName: "Bob",
+		LastName:  "Smith",
+		AvatarHex: "123abc",
+	}); err != nil {
+		t.Fatalf("Register(bob) error = %v", err)
+	}
+
+	if _, err := userClient.GetProfile(ctx, &messengerv1.GetProfileRequest{}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("GetProfile() without auth code = %v, want %v", status.Code(err), codes.Unauthenticated)
+	}
+
+	if _, err := authClient.Login(ctx, &messengerv1.LoginRequest{
+		Username: "ghost",
+		Password: "secret",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("Login(ghost) code = %v, want %v", status.Code(err), codes.NotFound)
+	}
+
+	if _, err := authClient.Login(ctx, &messengerv1.LoginRequest{
+		Username: "alice",
+		Password: "bad",
+	}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("Login(alice,bad) code = %v, want %v", status.Code(err), codes.Unauthenticated)
+	}
+
+	loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
+		Username: "alice",
+		Password: "secret",
+	})
+	if err != nil {
+		t.Fatalf("Login(alice) error = %v", err)
+	}
+	if loginResp.GetToken() == "" {
+		t.Fatal("Login(alice) returned empty token")
+	}
+
+	aliceCtx := authContext(ctx, loginResp.GetToken())
+
+	profile, err := userClient.GetProfile(aliceCtx, &messengerv1.GetProfileRequest{})
+	if err != nil {
+		t.Fatalf("GetProfile(self) error = %v", err)
+	}
+	if profile.GetUsername() != "alice" || profile.GetAvatarHex() == "" {
+		t.Fatalf("GetProfile(self) = %+v", profile)
+	}
+
+	searchResp, err := userClient.SearchUsers(aliceCtx, &messengerv1.SearchUsersRequest{
+		Query: "bo",
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("SearchUsers() error = %v", err)
+	}
+	if len(searchResp.GetItems()) != 1 || searchResp.GetItems()[0].GetUsername() != "bob" {
+		t.Fatalf("SearchUsers() = %+v", searchResp.GetItems())
+	}
+
+	updated, err := userClient.UpdateProfile(aliceCtx, &messengerv1.UpdateProfileRequest{
+		FirstName: "Alicia",
+		AvatarHex: "abcdef",
+	})
+	if err != nil {
+		t.Fatalf("UpdateProfile() error = %v", err)
+	}
+	if updated.GetFirstName() != "Alicia" || updated.GetAvatarHex() != "abcdef" {
+		t.Fatalf("UpdateProfile() = %+v", updated)
+	}
+
+	bobProfile, err := userClient.GetProfile(aliceCtx, &messengerv1.GetProfileRequest{Username: "bob"})
+	if err != nil {
+		t.Fatalf("GetProfile(bob) error = %v", err)
+	}
+	if bobProfile.GetUsername() != "bob" || bobProfile.GetAvatarHex() != "123abc" {
+		t.Fatalf("GetProfile(bob) = %+v", bobProfile)
+	}
+
+	if _, err := authClient.DeleteAccount(aliceCtx, &emptypb.Empty{}); err != nil {
+		t.Fatalf("DeleteAccount() error = %v", err)
+	}
+	if _, err := userClient.ListConversations(aliceCtx, &emptypb.Empty{}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("ListConversations() after delete code = %v, want %v", status.Code(err), codes.Unauthenticated)
+	}
+}
+
+func TestServerMessageFlowAndStreaming(t *testing.T) {
+	t.Parallel()
+
+	authClient, userClient, messageClient, cleanup := newTestClients(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	registerAndLogin := func(username string) context.Context {
+		t.Helper()
+
+		if _, err := authClient.Register(ctx, &messengerv1.RegisterRequest{
+			Username:  username,
+			Password:  "secret",
+			FirstName: username,
+		}); err != nil {
+			t.Fatalf("Register(%s) error = %v", username, err)
+		}
+		loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
+			Username: username,
+			Password: "secret",
+		})
+		if err != nil {
+			t.Fatalf("Login(%s) error = %v", username, err)
+		}
+		return authContext(ctx, loginResp.GetToken())
+	}
+
+	aliceCtx := registerAndLogin("alice")
+	bobCtx := registerAndLogin("bob")
+
+	bobStream, err := messageClient.StreamEvents(bobCtx, &messengerv1.StreamEventsRequest{})
+	if err != nil {
+		t.Fatalf("StreamEvents(bob) error = %v", err)
+	}
+	aliceStream, err := messageClient.StreamEvents(aliceCtx, &messengerv1.StreamEventsRequest{})
+	if err != nil {
+		t.Fatalf("StreamEvents(alice) error = %v", err)
+	}
+
+	if _, err := waitForEvent(t, bobStream, func(event *messengerv1.ServerEvent) bool {
+		presence := event.GetPresence()
+		return presence != nil && containsAll(presence.GetOnlineUsers(), "alice", "bob")
+	}); err != nil {
+		t.Fatalf("waiting for bob presence event: %v", err)
+	}
+	if _, err := waitForEvent(t, aliceStream, func(event *messengerv1.ServerEvent) bool {
+		presence := event.GetPresence()
+		return presence != nil && containsAll(presence.GetOnlineUsers(), "alice", "bob")
+	}); err != nil {
+		t.Fatalf("waiting for alice presence event: %v", err)
+	}
+
+	sent, err := messageClient.SendMessage(aliceCtx, &messengerv1.SendMessageRequest{
+		To:   "bob",
+		Text: "hello over grpc",
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+	if sent.GetMessageId() == 0 || sent.GetConversationId() != "alice|bob" {
+		t.Fatalf("SendMessage() = %+v", sent)
+	}
+
+	event, err := waitForEvent(t, bobStream, func(event *messengerv1.ServerEvent) bool {
+		msg := event.GetMessage()
+		return msg != nil && msg.GetMessageId() == sent.GetMessageId()
+	})
+	if err != nil {
+		t.Fatalf("waiting for bob message event: %v", err)
+	}
+	if got := event.GetMessage(); got.GetText() != "hello over grpc" || got.GetFrom() != "alice" || got.GetTo() != "bob" {
+		t.Fatalf("message event = %+v", got)
+	}
+
+	history, err := messageClient.GetMessages(aliceCtx, &messengerv1.GetMessagesRequest{
+		WithUsername: "bob",
+		Limit:        10,
+	})
+	if err != nil {
+		t.Fatalf("GetMessages() error = %v", err)
+	}
+	if len(history.GetItems()) != 1 || history.GetItems()[0].GetMessageId() != sent.GetMessageId() {
+		t.Fatalf("GetMessages() = %+v", history.GetItems())
+	}
+
+	conversations, err := userClient.ListConversations(aliceCtx, &emptypb.Empty{})
+	if err != nil {
+		t.Fatalf("ListConversations() error = %v", err)
+	}
+	if len(conversations.GetItems()) != 1 || conversations.GetItems()[0].GetPeerUsername() != "bob" {
+		t.Fatalf("ListConversations() = %+v", conversations.GetItems())
+	}
+
+	found, err := messageClient.SearchMessages(aliceCtx, &messengerv1.SearchMessagesRequest{
+		Query: "grpc",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("SearchMessages() error = %v", err)
+	}
+	if len(found.GetItems()) != 1 || found.GetItems()[0].GetMessageId() != sent.GetMessageId() {
+		t.Fatalf("SearchMessages() = %+v", found.GetItems())
+	}
+
+	if _, err := messageClient.DeleteMessage(bobCtx, &messengerv1.DeleteMessageRequest{MessageId: sent.GetMessageId()}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("DeleteMessage(bob) code = %v, want %v", status.Code(err), codes.PermissionDenied)
+	}
+
+	if _, err := messageClient.DeleteMessage(aliceCtx, &messengerv1.DeleteMessageRequest{MessageId: sent.GetMessageId()}); err != nil {
+		t.Fatalf("DeleteMessage(alice) error = %v", err)
+	}
+
+	deletedEvent, err := waitForEvent(t, bobStream, func(event *messengerv1.ServerEvent) bool {
+		deleted := event.GetMessageDeleted()
+		return deleted != nil && deleted.GetMessageId() == sent.GetMessageId()
+	})
+	if err != nil {
+		t.Fatalf("waiting for delete event: %v", err)
+	}
+	if deletedEvent.GetMessageDeleted().GetConversationId() != "alice|bob" {
+		t.Fatalf("delete event = %+v", deletedEvent.GetMessageDeleted())
+	}
+
+	history, err = messageClient.GetMessages(aliceCtx, &messengerv1.GetMessagesRequest{
+		ConversationId: "alice|bob",
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("GetMessages() after delete error = %v", err)
+	}
+	if len(history.GetItems()) != 0 {
+		t.Fatalf("GetMessages() after delete len = %d, want 0", len(history.GetItems()))
+	}
+}
+
+func TestServerGroupConversationFlow(t *testing.T) {
+	t.Parallel()
+
+	authClient, userClient, messageClient, cleanup := newTestClients(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	registerAndLogin := func(username string) context.Context {
+		t.Helper()
+
+		if _, err := authClient.Register(ctx, &messengerv1.RegisterRequest{
+			Username: username,
+			Password: "secret",
+		}); err != nil {
+			t.Fatalf("Register(%s) error = %v", username, err)
+		}
+		loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
+			Username: username,
+			Password: "secret",
+		})
+		if err != nil {
+			t.Fatalf("Login(%s) error = %v", username, err)
+		}
+		return authContext(ctx, loginResp.GetToken())
+	}
+
+	aliceCtx := registerAndLogin("alice")
+	bobCtx := registerAndLogin("bob")
+	carolCtx := registerAndLogin("carol")
+	daveCtx := registerAndLogin("dave")
+	erinCtx := registerAndLogin("erin")
+
+	bobStream, err := messageClient.StreamEvents(bobCtx, &messengerv1.StreamEventsRequest{})
+	if err != nil {
+		t.Fatalf("StreamEvents(bob) error = %v", err)
+	}
+	if _, err := waitForEvent(t, bobStream, func(event *messengerv1.ServerEvent) bool {
+		return event.GetPresence() != nil
+	}); err != nil {
+		t.Fatalf("waiting for bob presence event: %v", err)
+	}
+	carolStream, err := messageClient.StreamEvents(carolCtx, &messengerv1.StreamEventsRequest{})
+	if err != nil {
+		t.Fatalf("StreamEvents(carol) error = %v", err)
+	}
+	if _, err := waitForEvent(t, carolStream, func(event *messengerv1.ServerEvent) bool {
+		return event.GetPresence() != nil
+	}); err != nil {
+		t.Fatalf("waiting for carol presence event: %v", err)
+	}
+	daveStream, err := messageClient.StreamEvents(daveCtx, &messengerv1.StreamEventsRequest{})
+	if err != nil {
+		t.Fatalf("StreamEvents(dave) error = %v", err)
+	}
+	if _, err := waitForEvent(t, daveStream, func(event *messengerv1.ServerEvent) bool {
+		return event.GetPresence() != nil
+	}); err != nil {
+		t.Fatalf("waiting for dave presence event: %v", err)
+	}
+	erinStream, err := messageClient.StreamEvents(erinCtx, &messengerv1.StreamEventsRequest{})
+	if err != nil {
+		t.Fatalf("StreamEvents(erin) error = %v", err)
+	}
+	if _, err := waitForEvent(t, erinStream, func(event *messengerv1.ServerEvent) bool {
+		return event.GetPresence() != nil
+	}); err != nil {
+		t.Fatalf("waiting for erin presence event: %v", err)
+	}
+
+	group, err := userClient.CreateGroupConversation(aliceCtx, &messengerv1.CreateGroupConversationRequest{
+		Title:           "Diploma team",
+		MemberUsernames: []string{"bob", "carol"},
+	})
+	if err != nil {
+		t.Fatalf("CreateGroupConversation() error = %v", err)
+	}
+	if group.GetKind() != messengerv1.ConversationKind_CONVERSATION_KIND_GROUP {
+		t.Fatalf("CreateGroupConversation().Kind = %v", group.GetKind())
+	}
+	if group.GetTitle() != "Diploma team" {
+		t.Fatalf("CreateGroupConversation().Title = %q", group.GetTitle())
+	}
+	if len(group.GetMemberUsernames()) != 3 {
+		t.Fatalf("CreateGroupConversation().Members = %+v", group.GetMemberUsernames())
+	}
+	if len(group.GetMembers()) != 3 || group.GetMembers()[0].GetUsername() != "alice" || group.GetMembers()[0].GetRole() != messengerv1.ConversationRole_CONVERSATION_ROLE_ADMIN {
+		t.Fatalf("CreateGroupConversation().DetailedMembers = %+v", group.GetMembers())
+	}
+
+	createdEvent, err := waitForEvent(t, bobStream, func(event *messengerv1.ServerEvent) bool {
+		conversation := event.GetConversation()
+		return conversation != nil && conversation.GetConversationId() == group.GetConversationId()
+	})
+	if err != nil {
+		t.Fatalf("waiting for conversation created event: %v", err)
+	}
+	if createdEvent.GetConversation().GetTitle() != "Diploma team" {
+		t.Fatalf("conversation event = %+v", createdEvent.GetConversation())
+	}
+
+	items, err := userClient.ListConversations(bobCtx, &emptypb.Empty{})
+	if err != nil {
+		t.Fatalf("ListConversations() error = %v", err)
+	}
+	if len(items.GetItems()) != 1 || items.GetItems()[0].GetKind() != messengerv1.ConversationKind_CONVERSATION_KIND_GROUP {
+		t.Fatalf("ListConversations() = %+v", items.GetItems())
+	}
+
+	sent, err := messageClient.SendMessage(aliceCtx, &messengerv1.SendMessageRequest{
+		ConversationId: group.GetConversationId(),
+		Text:           "hello group",
+	})
+	if err != nil {
+		t.Fatalf("SendMessage(group) error = %v", err)
+	}
+	if sent.GetConversationId() != group.GetConversationId() || sent.GetTo() != group.GetConversationId() {
+		t.Fatalf("SendMessage(group) = %+v", sent)
+	}
+
+	event, err := waitForEvent(t, bobStream, func(event *messengerv1.ServerEvent) bool {
+		msg := event.GetMessage()
+		return msg != nil && msg.GetMessageId() == sent.GetMessageId()
+	})
+	if err != nil {
+		t.Fatalf("waiting for group message event: %v", err)
+	}
+	if event.GetMessage().GetText() != "hello group" {
+		t.Fatalf("group event = %+v", event.GetMessage())
+	}
+
+	history, err := messageClient.GetMessages(bobCtx, &messengerv1.GetMessagesRequest{
+		ConversationId: group.GetConversationId(),
+		Limit:          20,
+	})
+	if err != nil {
+		t.Fatalf("GetMessages(group) error = %v", err)
+	}
+	if len(history.GetItems()) != 1 || history.GetItems()[0].GetConversationId() != group.GetConversationId() {
+		t.Fatalf("GetMessages(group) = %+v", history.GetItems())
+	}
+
+	updatedGroup, err := userClient.AddGroupMembers(aliceCtx, &messengerv1.AddGroupMembersRequest{
+		ConversationId:  group.GetConversationId(),
+		MemberUsernames: []string{"dave"},
+	})
+	if err != nil {
+		t.Fatalf("AddGroupMembers() error = %v", err)
+	}
+	if len(updatedGroup.GetMemberUsernames()) != 4 {
+		t.Fatalf("AddGroupMembers() = %+v", updatedGroup.GetMemberUsernames())
+	}
+	if updatedGroup.GetMembers()[3].GetUsername() != "dave" || updatedGroup.GetMembers()[3].GetAddedBy() != "alice" {
+		t.Fatalf("AddGroupMembers().Members = %+v", updatedGroup.GetMembers())
+	}
+
+	updatedEvent, err := waitForEvent(t, bobStream, func(event *messengerv1.ServerEvent) bool {
+		conversation := event.GetConversation()
+		return conversation != nil && len(conversation.GetMemberUsernames()) == 4
+	})
+	if err != nil {
+		t.Fatalf("waiting for conversation updated event: %v", err)
+	}
+	if len(updatedEvent.GetConversation().GetMemberUsernames()) != 4 {
+		t.Fatalf("updated conversation event = %+v", updatedEvent.GetConversation())
+	}
+	if _, err := waitForEvent(t, daveStream, func(event *messengerv1.ServerEvent) bool {
+		conversation := event.GetConversation()
+		return conversation != nil && conversation.GetConversationId() == group.GetConversationId()
+	}); err != nil {
+		t.Fatalf("waiting for dave added event: %v", err)
+	}
+
+	updatedGroup, err = userClient.RemoveGroupMember(aliceCtx, &messengerv1.RemoveGroupMemberRequest{
+		ConversationId: group.GetConversationId(),
+		Username:       "carol",
+	})
+	if err != nil {
+		t.Fatalf("RemoveGroupMember() error = %v", err)
+	}
+	if len(updatedGroup.GetMemberUsernames()) != 3 {
+		t.Fatalf("RemoveGroupMember() = %+v", updatedGroup.GetMemberUsernames())
+	}
+	if _, err := waitForEvent(t, carolStream, func(event *messengerv1.ServerEvent) bool {
+		removed := event.GetConversationRemoved()
+		return removed != nil && removed.GetConversationId() == group.GetConversationId()
+	}); err != nil {
+		t.Fatalf("waiting for carol removed event: %v", err)
+	}
+
+	carolConversations, err := userClient.ListConversations(carolCtx, &emptypb.Empty{})
+	if err != nil {
+		t.Fatalf("ListConversations(carol) error = %v", err)
+	}
+	if len(carolConversations.GetItems()) != 0 {
+		t.Fatalf("ListConversations(carol) = %+v", carolConversations.GetItems())
+	}
+	if _, err := messageClient.GetMessages(carolCtx, &messengerv1.GetMessagesRequest{
+		ConversationId: group.GetConversationId(),
+		Limit:          20,
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("GetMessages(carol after remove) code = %v, want %v", status.Code(err), codes.PermissionDenied)
+	}
+
+	if _, err := userClient.AddGroupMembers(bobCtx, &messengerv1.AddGroupMembersRequest{
+		ConversationId:  group.GetConversationId(),
+		MemberUsernames: []string{"erin"},
+	}); err != nil {
+		t.Fatalf("AddGroupMembers(bob, erin) error = %v", err)
+	}
+	if _, err := waitForEvent(t, erinStream, func(event *messengerv1.ServerEvent) bool {
+		conversation := event.GetConversation()
+		return conversation != nil && conversation.GetConversationId() == group.GetConversationId()
+	}); err != nil {
+		t.Fatalf("waiting for erin added event: %v", err)
+	}
+
+	if _, err := userClient.RemoveGroupMember(bobCtx, &messengerv1.RemoveGroupMemberRequest{
+		ConversationId: group.GetConversationId(),
+		Username:       "dave",
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("RemoveGroupMember(bob,dave) code = %v, want %v", status.Code(err), codes.PermissionDenied)
+	}
+
+	if _, err := userClient.RemoveGroupMember(bobCtx, &messengerv1.RemoveGroupMemberRequest{
+		ConversationId: group.GetConversationId(),
+		Username:       "erin",
+	}); err != nil {
+		t.Fatalf("RemoveGroupMember(bob,erin) error = %v", err)
+	}
+	if _, err := waitForEvent(t, erinStream, func(event *messengerv1.ServerEvent) bool {
+		removed := event.GetConversationRemoved()
+		return removed != nil && removed.GetConversationId() == group.GetConversationId()
+	}); err != nil {
+		t.Fatalf("waiting for erin removed event: %v", err)
+	}
+
+	if _, err := userClient.TransferGroupAdmin(aliceCtx, &messengerv1.TransferGroupAdminRequest{
+		ConversationId: group.GetConversationId(),
+		Username:       "dave",
+	}); err != nil {
+		t.Fatalf("TransferGroupAdmin() error = %v", err)
+	}
+
+	transferredEvent, err := waitForEvent(t, daveStream, func(event *messengerv1.ServerEvent) bool {
+		conversation := event.GetConversation()
+		if conversation == nil || conversation.GetConversationId() != group.GetConversationId() {
+			return false
+		}
+		for _, member := range conversation.GetMembers() {
+			if member.GetUsername() == "dave" && member.GetRole() == messengerv1.ConversationRole_CONVERSATION_ROLE_ADMIN {
+				return true
+			}
+		}
+		return false
+	})
+	if err != nil {
+		t.Fatalf("waiting for admin transfer event: %v", err)
+	}
+	if !hasRole(transferredEvent.GetConversation(), "dave", messengerv1.ConversationRole_CONVERSATION_ROLE_ADMIN) {
+		t.Fatalf("TransferGroupAdmin() conversation = %+v", transferredEvent.GetConversation().GetMembers())
+	}
+
+	if _, err := userClient.LeaveGroupConversation(daveCtx, &messengerv1.LeaveGroupConversationRequest{
+		ConversationId: group.GetConversationId(),
+	}); err != nil {
+		t.Fatalf("LeaveGroupConversation(dave) error = %v", err)
+	}
+	leaveEvent, err := waitForEvent(t, bobStream, func(event *messengerv1.ServerEvent) bool {
+		conversation := event.GetConversation()
+		if conversation == nil || conversation.GetConversationId() != group.GetConversationId() {
+			return false
+		}
+		return hasRole(conversation, "alice", messengerv1.ConversationRole_CONVERSATION_ROLE_ADMIN)
+	})
+	if err != nil {
+		t.Fatalf("waiting for admin leave update: %v", err)
+	}
+	if !hasRole(leaveEvent.GetConversation(), "alice", messengerv1.ConversationRole_CONVERSATION_ROLE_ADMIN) {
+		t.Fatalf("LeaveGroupConversation() conversation = %+v", leaveEvent.GetConversation().GetMembers())
+	}
+}
+
+func newTestClients(t *testing.T) (messengerv1.AuthServiceClient, messengerv1.UserServiceClient, messengerv1.MessageServiceClient, func()) {
+	t.Helper()
+
+	userStore := store.NewMemoryUserStore()
+	msgStore := store.NewMemoryMessageStore()
+	convStore := store.NewMemoryConversationStore()
+	authSvc := auth.NewService(userStore)
+	apiServer := NewServer(authSvc, userStore, msgStore, convStore)
+
+	listener := bufconn.Listen(bufSize)
+	server := grpc.NewServer()
+	messengerv1.RegisterAuthServiceServer(server, apiServer)
+	messengerv1.RegisterUserServiceServer(server, apiServer)
+	messengerv1.RegisterMessageServiceServer(server, apiServer)
+
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			panic(err)
+		}
+	}()
+
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient() error = %v", err)
+	}
+
+	cleanup := func() {
+		_ = conn.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+
+	return messengerv1.NewAuthServiceClient(conn), messengerv1.NewUserServiceClient(conn), messengerv1.NewMessageServiceClient(conn), cleanup
+}
+
+func authContext(ctx context.Context, token string) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+}
+
+func waitForEvent(t *testing.T, stream messengerv1.MessageService_StreamEventsClient, match func(*messengerv1.ServerEvent) bool) (*messengerv1.ServerEvent, error) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Until(deadline))
+		eventCh := make(chan *messengerv1.ServerEvent, 1)
+		errCh := make(chan error, 1)
+
+		go func() {
+			event, err := stream.Recv()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			eventCh <- event
+		}()
+
+		select {
+		case <-ctx.Done():
+			cancel()
+			return nil, ctx.Err()
+		case err := <-errCh:
+			cancel()
+			if errors.Is(err, io.EOF) {
+				return nil, err
+			}
+			return nil, err
+		case event := <-eventCh:
+			cancel()
+			if match(event) {
+				return event, nil
+			}
+		}
+	}
+	return nil, context.DeadlineExceeded
+}
+
+func containsAll(values []string, want ...string) bool {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	for _, item := range want {
+		if _, ok := set[item]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func hasRole(conversation *messengerv1.Conversation, username string, role messengerv1.ConversationRole) bool {
+	for _, member := range conversation.GetMembers() {
+		if member.GetUsername() == username && member.GetRole() == role {
+			return true
+		}
+	}
+	return false
+}

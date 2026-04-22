@@ -9,35 +9,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrNoDatabaseURL = errors.New("DATABASE_URL is not set")
-
 type PostgresMessageStore struct {
 	pool *pgxpool.Pool
 }
 
-func NewPostgresMessageStore(ctx context.Context, databaseURL string) (*PostgresMessageStore, error) {
-	if databaseURL == "" {
-		return nil, ErrNoDatabaseURL
-	}
-
-	pool, err := pgxpool.New(ctx, databaseURL)
-	if err != nil {
+func NewPostgresMessageStore(ctx context.Context, pool *pgxpool.Pool) (*PostgresMessageStore, error) {
+	s := &PostgresMessageStore{pool: pool}
+	if err := s.initSchema(ctx); err != nil {
 		return nil, err
 	}
-
-	store := &PostgresMessageStore{pool: pool}
-	if err := store.initSchema(ctx); err != nil {
-		pool.Close()
-		return nil, err
-	}
-
-	return store, nil
-}
-
-func (s *PostgresMessageStore) Close() {
-	if s.pool != nil {
-		s.pool.Close()
-	}
+	return s, nil
 }
 
 func (s *PostgresMessageStore) Save(ctx context.Context, msg Message) (Message, error) {
@@ -149,7 +130,10 @@ func (s *PostgresMessageStore) SearchMessages(ctx context.Context, username, que
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, conversation_id, sender, recipient, body, ts
 		FROM messages
-		WHERE (sender = $1 OR recipient = $1)
+		WHERE (sender = $1 OR recipient = $1
+		       OR conversation_id IN (
+		           SELECT conversation_id FROM conversation_members WHERE username = $1
+		       ))
 		  AND body ILIKE $2
 		ORDER BY ts DESC
 		LIMIT $3

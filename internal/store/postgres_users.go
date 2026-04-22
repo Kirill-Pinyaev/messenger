@@ -14,29 +14,12 @@ type PostgresUserStore struct {
 	pool *pgxpool.Pool
 }
 
-func NewPostgresUserStore(ctx context.Context, databaseURL string) (*PostgresUserStore, error) {
-	if databaseURL == "" {
-		return nil, ErrNoDatabaseURL
-	}
-
-	pool, err := pgxpool.New(ctx, databaseURL)
-	if err != nil {
+func NewPostgresUserStore(ctx context.Context, pool *pgxpool.Pool) (*PostgresUserStore, error) {
+	s := &PostgresUserStore{pool: pool}
+	if err := s.initSchema(ctx); err != nil {
 		return nil, err
 	}
-
-	store := &PostgresUserStore{pool: pool}
-	if err := store.initSchema(ctx); err != nil {
-		pool.Close()
-		return nil, err
-	}
-
-	return store, nil
-}
-
-func (s *PostgresUserStore) Close() {
-	if s.pool != nil {
-		s.pool.Close()
-	}
+	return s, nil
 }
 
 func (s *PostgresUserStore) Create(ctx context.Context, user User) error {
@@ -162,20 +145,15 @@ func (s *PostgresUserStore) GetMany(ctx context.Context, usernames []string) (ma
 func (s *PostgresUserStore) initSchema(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS users (
-			username TEXT PRIMARY KEY,
+			username   TEXT PRIMARY KEY,
 			first_name TEXT NOT NULL DEFAULT '',
-			last_name TEXT NOT NULL DEFAULT '',
+			last_name  TEXT NOT NULL DEFAULT '',
 			avatar_hex TEXT NOT NULL DEFAULT '',
 			avatar_data TEXT NOT NULL DEFAULT '',
-			salt BYTEA NOT NULL,
-			hash BYTEA NOT NULL,
+			salt       BYTEA NOT NULL,
+			hash       BYTEA NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL
 		);
-		ALTER TABLE users
-			ADD COLUMN IF NOT EXISTS first_name TEXT NOT NULL DEFAULT '',
-			ADD COLUMN IF NOT EXISTS last_name TEXT NOT NULL DEFAULT '',
-			ADD COLUMN IF NOT EXISTS avatar_hex TEXT NOT NULL DEFAULT '',
-			ADD COLUMN IF NOT EXISTS avatar_data TEXT NOT NULL DEFAULT '';
 	`)
 	return err
 }

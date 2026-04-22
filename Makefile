@@ -1,4 +1,8 @@
-.PHONY: up down restart logs db-clean
+GOPATH := $(shell go env GOPATH)
+PROTOC ?= $(shell which protoc 2>/dev/null || echo /tmp/protoc29/bin/protoc)
+PROTOC_INCLUDE ?= /tmp/protoc29/include
+
+.PHONY: up down restart logs db-clean proto test test-integration test-web cover cover-html
 
 up:
 	docker compose up -d --build
@@ -15,3 +19,26 @@ logs:
 
 db-clean:
 	docker compose down -v
+
+proto:
+	PATH=$$PATH:$(GOPATH)/bin $(PROTOC) -I $(PROTOC_INCLUDE) -I api/proto \
+		--go_out=paths=source_relative:gen \
+		--go-grpc_out=paths=source_relative:gen \
+		api/proto/messenger/v1/messenger.proto
+
+test:
+	go test ./...
+
+test-integration:
+	go test -tags=integration ./internal/store -run TestPostgresStoresIntegration -count=1
+
+test-web:
+	cd web && node --test src/lib/*.test.js
+
+cover:
+	go test ./internal/auth ./internal/grpcapi ./internal/store -coverprofile=coverage.out
+	go tool cover -func=coverage.out
+
+cover-html:
+	go test ./internal/auth ./internal/grpcapi ./internal/store -coverprofile=coverage.out
+	go tool cover -html=coverage.out
