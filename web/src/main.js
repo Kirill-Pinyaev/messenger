@@ -29,6 +29,15 @@ const app = document.getElementById("app");
 
 const AVATAR_COLORS = ['#5b8dee','#ee5b8d','#5beeca','#eec15b','#c45bee','#7c6fff','#ef4444','#10b981'];
 
+const ACCENT_COLORS = [
+  ["#7c6fff", "#9380ff"],
+  ["#4d8fff", "#70aaff"],
+  ["#10b981", "#34d399"],
+  ["#f59e0b", "#fbbf24"],
+  ["#ef4444", "#f87171"],
+  ["#ec4899", "#f472b6"],
+];
+
 function avatarColorFor(username) {
   let h = 0;
   for (let i = 0; i < username.length; i++) h = (h * 31 + username.charCodeAt(i)) | 0;
@@ -61,8 +70,11 @@ const IC = {
   settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
   user:     "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
   trash:    "M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6",
-  close:    "M18 6L6 18M6 6l12 12",
-  check:    "M20 6L9 17l-5-5",
+  close:      "M18 6L6 18M6 6l12 12",
+  check:      "M20 6L9 17l-5-5",
+  edit:       "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z",
+  chevronUp:  "M18 15l-6-6-6 6",
+  chevronDown:"M6 9l6 6 6-6",
 };
 
 function ic(name, size = 18, color = 'currentColor') {
@@ -77,6 +89,22 @@ function shortTime(timestamp) {
   else if (typeof timestamp.seconds === 'number') d = new Date(timestamp.seconds * 1000);
   else return '';
   return d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
+}
+
+function doubleCheck(read = true) {
+  const c = read ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.45)';
+  return `<svg width="20" height="12" viewBox="0 0 20 12" fill="none" style="flex-shrink:0;vertical-align:middle;">
+    <polyline points="1,6 5,10 12,2" stroke="${c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="8,10 15,2" stroke="${c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+function highlightText(text, query) {
+  if (!query) return escapeHtml(text);
+  const escaped = escapeHtml(text);
+  const escapedQuery = escapeHtml(query);
+  const regex = new RegExp(`(${escapedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  return escaped.replace(regex, '<mark class="search-hl">$1</mark>');
 }
 
 function getLastMessage(conversationId) {
@@ -95,9 +123,12 @@ const state = {
   activePeer: "",
   userSearchQuery: "",
   userSearchResults: [],
+  messageSearchOpen: false,
   messageSearchQuery: "",
   messageSearchResults: [],
+  messageSearchIndex: 0,
   selectedMessageId: 0,
+  localUnread: new Map(),
   groupEditorOpen: false,
   groupEditorMode: "create",
   groupEditorConversationId: "",
@@ -114,6 +145,13 @@ const state = {
   authError: false,
   showRegisterPrompt: false,
   showProfileEditor: false,
+  showSelfProfile: false,
+  showConvProfile: false,
+  showSettings: false,
+  settings: (() => {
+    const defaults = { theme: "dark", accent: "#7c6fff", font: "Inter", pushNotifications: true, messageSounds: false, compactMode: false };
+    try { return { ...defaults, ...JSON.parse(localStorage.getItem("messenger-settings") || "{}") }; } catch { return defaults; }
+  })(),
   profileDraft: {
     firstName: "",
     lastName: "",
@@ -121,6 +159,37 @@ const state = {
     avatarData: "",
   },
 };
+
+function applySettings() {
+  const s = state.settings;
+  const root = document.documentElement;
+
+  const pair = ACCENT_COLORS.find(([v]) => v === s.accent) || ACCENT_COLORS[0];
+  root.style.setProperty("--accent", pair[0]);
+  root.style.setProperty("--accent-hover", pair[1]);
+  root.style.setProperty("--bubble-me", pair[0]);
+
+  const fontMap = { "Inter": "'Inter',sans-serif", "IBM Plex": "'IBM Plex Mono',monospace", "Space G.": "'Space Grotesk',sans-serif" };
+  root.style.setProperty("--font", fontMap[s.font] || fontMap["Inter"]);
+
+  const lightVars = {
+    "--bg":"#f2f2fa","--sidebar":"#e8e8f4","--sidebar-hover":"#dcdcea",
+    "--panel":"#f4f4fc","--panel-border":"#d0d0e8","--chat-bg":"#ededf7",
+    "--bubble":"#e0e0f0","--input-bg":"#eaeaf4","--input-border":"#c4c4dc",
+    "--text":"#1a1a30","--text-muted":"#6060a0","--text-soft":"#5050a0",
+    "--divider":"#d0d0e8","--shadow":"0 24px 60px rgba(0,0,0,0.15)",
+  };
+  if (s.theme === "light") {
+    for (const [k, v] of Object.entries(lightVars)) root.style.setProperty(k, v);
+    root.style.setProperty("--online", "#059669");
+  } else {
+    for (const k of [...Object.keys(lightVars), "--online"]) root.style.removeProperty(k);
+  }
+
+  document.body.classList.toggle("compact", !!s.compactMode);
+  localStorage.setItem("messenger-settings", JSON.stringify(s));
+}
+applySettings();
 
 const authInterceptor = (next) => async (req) => {
   if (state.token) {
@@ -188,6 +257,206 @@ function renderAuth() {
   `;
 }
 
+function buildSettingsModal() {
+  if (!state.showSettings) return "";
+  const s = state.settings;
+  const moon = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
+  const sun  = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`;
+  const themes = [
+    { key: "dark",  icon: moon, label: "Тёмная",  sub: "Для ночи" },
+    { key: "light", icon: sun,  label: "Светлая", sub: "Для дня"  },
+  ];
+  const fonts = ["Inter", "IBM Plex", "Space G."];
+  const fontFamilies = { "Inter": "Inter,sans-serif", "IBM Plex": "'IBM Plex Mono',monospace", "Space G.": "'Space Grotesk',sans-serif" };
+  return `
+    <div class="modal-overlay" id="settings-overlay">
+      <div class="modal-card settings-card">
+        <div class="modal-header">
+          <div class="modal-title">Настройки</div>
+          <button id="close-settings" class="icon-btn">${ic("close", 18)}</button>
+        </div>
+
+        <div class="settings-section-label">Внешний вид</div>
+
+        <div class="settings-theme-row">
+          ${themes.map(t => `
+            <div class="settings-theme-card ${s.theme === t.key ? "active" : ""}" data-settings-theme="${t.key}">
+              <div class="settings-theme-icon">${t.icon}</div>
+              <div>
+                <div class="settings-theme-name">${t.label}</div>
+                <div class="settings-theme-sub">${t.sub}</div>
+              </div>
+              ${s.theme === t.key ? `<div class="settings-theme-check">${ic("check", 11, "#fff")}</div>` : ""}
+            </div>
+          `).join("")}
+        </div>
+
+        <div class="settings-label">Акцентный цвет</div>
+        <div class="accent-swatches">
+          ${ACCENT_COLORS.map(([color]) => `
+            <div class="accent-swatch ${s.accent === color ? "active" : ""}" data-settings-accent="${color}" style="background:${color};">
+              ${s.accent === color ? ic("check", 13, "#fff") : ""}
+            </div>
+          `).join("")}
+        </div>
+
+        <div class="settings-label">Шрифт</div>
+        <div class="font-tabs">
+          ${fonts.map(f => `
+            <button class="font-tab ${s.font === f ? "active" : ""}" data-settings-font="${f}" style="font-family:${fontFamilies[f]};">${f}</button>
+          `).join("")}
+        </div>
+
+        <div class="settings-section-label" style="margin-top:6px;">Уведомления</div>
+
+        <div class="settings-toggle-row">
+          <span>Push-уведомления</span>
+          <label class="toggle"><input type="checkbox" id="toggle-push" ${s.pushNotifications ? "checked" : ""}><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+        </div>
+        <div class="settings-toggle-row">
+          <span>Звуки сообщений</span>
+          <label class="toggle"><input type="checkbox" id="toggle-sounds" ${s.messageSounds ? "checked" : ""}><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+        </div>
+        <div class="settings-toggle-row">
+          <span>Компактный режим</span>
+          <label class="toggle"><input type="checkbox" id="toggle-compact" ${s.compactMode ? "checked" : ""}><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+        </div>
+
+        <div class="settings-connection">
+          <div class="settings-connection-dot ${state.status === "connected" ? "connected" : ""}"></div>
+          <span>${state.status === "connected" ? "Подключено" : state.status === "reconnecting" ? "Переподключение..." : "Нет подключения"}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function patchSearchUI() {
+  const query = state.messageSearchQuery.trim();
+  const searchInConv = query
+    ? state.messageSearchResults.filter((m) => m.conversationId === state.activeConversationId)
+    : [];
+  const searchIdx = Math.min(state.messageSearchIndex, Math.max(0, searchInConv.length - 1));
+  const searchCurrentId = searchInConv[searchIdx]?.messageId ?? 0;
+
+  // Patch messages area
+  const messagesEl = document.getElementById("messages");
+  if (messagesEl) {
+    messagesEl.innerHTML = renderMessages(getActiveMessages(), query, searchCurrentId);
+    messagesEl.querySelectorAll("[data-message-select]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const mid = Number(el.getAttribute("data-message-select"));
+        state.selectedMessageId = state.selectedMessageId === mid ? 0 : mid;
+        render();
+      });
+    });
+  }
+
+  // Patch nav counter (prev/next buttons + counter)
+  const navArea = document.getElementById("search-nav-area");
+  if (navArea) {
+    navArea.innerHTML = searchInConv.length > 0 ? `
+      <span class="msg-search-counter">${searchIdx + 1}/${searchInConv.length}</span>
+      <button id="search-prev" class="icon-btn" type="button">${ic("chevronUp", 15)}</button>
+      <button id="search-next" class="icon-btn" type="button">${ic("chevronDown", 15)}</button>
+    ` : "";
+    document.getElementById("search-prev")?.addEventListener("click", () => {
+      const inConv = state.messageSearchResults.filter((m) => m.conversationId === state.activeConversationId);
+      if (!inConv.length) return;
+      state.messageSearchIndex = (state.messageSearchIndex - 1 + inConv.length) % inConv.length;
+      patchSearchUI();
+      scrollToCurrentSearchResult();
+    });
+    document.getElementById("search-next")?.addEventListener("click", () => {
+      const inConv = state.messageSearchResults.filter((m) => m.conversationId === state.activeConversationId);
+      if (!inConv.length) return;
+      state.messageSearchIndex = (state.messageSearchIndex + 1) % inConv.length;
+      patchSearchUI();
+      scrollToCurrentSearchResult();
+    });
+  }
+}
+
+function buildGroupUserListHtml(label, users, selectedSet) {
+  const empty = users.length === 0 && state.groupMemberQuery.length >= 1
+    ? `<div style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px 0;">Ничего не найдено</div>`
+    : "";
+  return `
+    ${label ? `<div class="section-label" style="padding:0 4px 8px;">${label}</div>` : ""}
+    ${empty}
+    ${users.map((u) => {
+      const isSelected = selectedSet.has(u.username);
+      const uName = displayName(u.username);
+      return `
+        <div class="user-toggle-row" data-group-toggle="${escapeHtml(u.username)}">
+          <div style="display:flex;align-items:center;gap:10px;">
+            ${avatarHtml(uName, getAvatarColor(u.username), 36, state.onlineUsers.has(u.username), 'var(--panel)')}
+            <div>
+              <div style="font-size:13px;font-weight:500;color:var(--text);">${escapeHtml(uName)}</div>
+              <div style="font-size:11px;color:var(--text-muted);">@${escapeHtml(u.username)}</div>
+            </div>
+          </div>
+          <div class="checkbox ${isSelected ? "checked" : ""}">
+            ${isSelected ? ic("check", 11, "#fff") : ""}
+          </div>
+        </div>
+      `;
+    }).join("")}
+  `;
+}
+
+function patchGroupUserList() {
+  const container = document.getElementById("group-user-list");
+  if (!container) return;
+
+  let listUsers = [];
+  let listLabel = "";
+  if (state.groupMemberQuery.length >= 1) {
+    listUsers = state.groupSearchResults.filter((u) => u.username !== state.username);
+    listLabel = "Результаты поиска";
+  } else {
+    const recentPeers = state.conversations
+      .filter((c) => c.kind !== 2)
+      .map((c) => c.peerUsername || c.peerProfile?.username || "")
+      .filter(Boolean);
+    listUsers = recentPeers.map((un) => state.profiles.get(un) || { username: un }).filter((u) => u.username !== state.username);
+    listLabel = listUsers.length ? "Недавние чаты" : "";
+  }
+  const selectedSet = new Set(state.groupSelectedMembers.map((u) => u.username));
+  container.innerHTML = buildGroupUserListHtml(listLabel, listUsers, selectedSet);
+  bindGroupToggleHandlers();
+}
+
+function bindGroupToggleHandlers() {
+  document.querySelectorAll("[data-group-toggle]").forEach((element) => {
+    element.addEventListener("click", () => {
+      const username = element.getAttribute("data-group-toggle");
+      if (!username) return;
+      const alreadySelected = state.groupSelectedMembers.some((m) => m.username === username);
+      if (alreadySelected) {
+        state.groupSelectedMembers = removeDraftMember(state.groupSelectedMembers, username);
+      } else {
+        const user = state.groupSearchResults.find((u) => u.username === username)
+          || state.profiles.get(username)
+          || { username };
+        state.groupSelectedMembers = addDraftMember(state.groupSelectedMembers, user);
+      }
+      const isNow = state.groupSelectedMembers.some((m) => m.username === username);
+      const cb = element.querySelector(".checkbox");
+      if (cb) {
+        cb.className = `checkbox${isNow ? " checked" : ""}`;
+        cb.innerHTML = isNow ? ic("check", 11, "#fff") : "";
+      }
+      const submitBtn = document.getElementById("submit-create-group");
+      if (submitBtn) {
+        const ok = state.groupTitleDraft.trim().length > 0 && state.groupSelectedMembers.length > 0;
+        submitBtn.disabled = !ok;
+        submitBtn.textContent = `Создать группу${state.groupSelectedMembers.length > 0 ? ` (${state.groupSelectedMembers.length})` : ""}`;
+      }
+    });
+  });
+}
+
 function renderChat() {
   const activeMessages = getActiveMessages();
   const profile = state.profile || {};
@@ -205,11 +474,7 @@ function renderChat() {
       <div class="sidebar-header">
         <div class="sidebar-header-top">
           <div class="sidebar-logo"><span class="logo-star">✦</span> Messenger</div>
-          <div style="display:flex;gap:4px;align-items:center;">
-            <div class="status-pill ${state.status === "connected" ? "connected" : ""}">
-              <div class="status-dot"></div>${escapeHtml(state.status)}
-            </div>
-          </div>
+          <button id="open-settings" class="icon-btn sidebar-settings-btn" title="Настройки">${ic("settings", 17)}</button>
         </div>
         <div class="search-wrap">
           <div class="search-icon">${ic("search", 16)}</div>
@@ -249,16 +514,18 @@ function renderChat() {
           const lastText = lastMsg ? escapeHtml(String(lastMsg.text || "").slice(0, 40)) : "";
           const lastTime = lastMsg ? escapeHtml(shortTime(lastMsg.createdAt)) : "";
           const active = conv.conversationId === state.activeConversationId ? "active" : "";
+          const unread = state.localUnread.get(conv.conversationId) || 0;
           return `
             <button class="conv-item ${active}" data-conversation-open="${escapeHtml(conv.conversationId)}" type="button">
               ${avatarHtml(label, color, 44, online)}
               <div class="conv-body">
                 <div class="conv-top">
                   <div class="conv-name">${escapeHtml(label)}</div>
-                  ${lastTime ? `<div class="conv-time">${lastTime}</div>` : ""}
+                  <div class="conv-time">${lastTime}</div>
                 </div>
                 <div class="conv-bottom">
                   <div class="conv-last">${lastText || (isGroup ? `${conv.memberUsernames?.length || 0} участников` : (online ? "в сети" : ""))}</div>
+                  ${unread > 0 ? `<div class="unread-badge">${unread}</div>` : ""}
                 </div>
               </div>
             </button>
@@ -268,7 +535,7 @@ function renderChat() {
 
       <div class="sidebar-footer">
         <div class="profile-row">
-          <div class="profile-clickable" id="toggle-profile">
+          <div class="profile-clickable" id="open-self-profile">
             ${avatarHtml(myName, myColor, 38, true)}
             <div style="min-width:0;">
               <div class="profile-name">${escapeHtml(myName)}</div>
@@ -277,88 +544,109 @@ function renderChat() {
           </div>
           <button class="logout-btn" id="logout" title="Выйти">${ic("logout", 16)}</button>
         </div>
-        ${state.showProfileEditor ? `
-          <div class="profile-editor">
-            <input id="profile-first-name" placeholder="Имя" value="${escapeHtml(profile.firstName || "")}" />
-            <input id="profile-last-name" placeholder="Фамилия" value="${escapeHtml(profile.lastName || "")}" />
-            <input id="profile-avatar-hex" placeholder="Цвет аватара (hex), например 7c6fff" value="${escapeHtml((profile.avatarHex || "").replace("#", ""))}" />
-            <div class="profile-editor-actions">
-              <button id="save-profile" class="btn btn-primary btn-sm" type="button">Сохранить</button>
-              <button id="cancel-profile" class="btn btn-ghost btn-sm" type="button">Отмена</button>
-              <button id="delete-account" class="btn btn-danger btn-sm" type="button">Удалить аккаунт</button>
-            </div>
+      </div>
+    </div>
+  `;
+
+  // ── Group editor modal ───────────────────────────────────────────────────
+  const selectedUsernames = new Set(state.groupSelectedMembers.map((u) => u.username));
+
+  // Users to show in the list: search results if query active, else recent DM peers
+  let groupListUsers = [];
+  let groupListLabel = "";
+  if (state.groupMemberQuery.length >= 1) {
+    groupListUsers = state.groupSearchResults.filter((u) => u.username !== state.username);
+    groupListLabel = "Результаты поиска";
+  } else {
+    const recentPeerUsernames = state.conversations
+      .filter((c) => c.kind !== 2)
+      .map((c) => c.peerUsername || c.peerProfile?.username || "")
+      .filter(Boolean);
+    groupListUsers = recentPeerUsernames
+      .map((un) => state.profiles.get(un) || { username: un })
+      .filter((u) => u.username !== state.username);
+    groupListLabel = groupListUsers.length ? "Недавние чаты" : "";
+  }
+
+  const groupEditorModal = state.groupEditorOpen ? `
+    <div class="modal-overlay" id="group-editor-overlay">
+      <div class="modal-card" style="width:min(440px,92vw);">
+        <div class="modal-header">
+          <div class="modal-title">${state.groupEditorMode === "create" ? "Создать группу" : "Управление участниками"}</div>
+          <button id="close-group-editor" class="icon-btn" type="button">${ic("close", 18)}</button>
+        </div>
+
+        ${state.groupEditorMode === "create" ? `
+          <input id="group-title" placeholder="Название группы"
+            value="${escapeHtml(state.groupTitleDraft)}"
+            style="background:var(--input-bg);border:1px solid var(--accent);border-radius:10px;padding:10px 14px;color:var(--text);font-size:14px;outline:none;width:100%;" />
+        ` : `
+          <div style="background:var(--input-bg);border:1px solid var(--input-border);border-radius:10px;padding:10px 14px;color:var(--text-muted);font-size:14px;">
+            ${escapeHtml(state.groupTitleDraft)}
+          </div>
+        `}
+
+        <div style="position:relative;">
+          <div style="position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--text-muted);pointer-events:none;display:flex;">${ic("search", 15)}</div>
+          <input id="group-user-search" placeholder="Поиск пользователей..."
+            value="${escapeHtml(state.groupMemberQuery)}"
+            style="width:100%;background:var(--input-bg);border:1px solid var(--input-border);border-radius:10px;padding:9px 12px 9px 36px;color:var(--text);font-size:13px;outline:none;" />
+        </div>
+
+        <div id="group-user-list" style="max-height:280px;overflow-y:auto;">
+          ${buildGroupUserListHtml(groupListLabel, groupListUsers, selectedUsernames)}
+        </div>
+
+        ${state.groupEditorMode === "edit" ? `
+          <div>
+            <div class="section-label">Текущие участники (${state.groupSelectedMembers.length})</div>
+            ${state.groupSelectedMembers.map((u) => `
+              <div class="ge-item" style="margin-bottom:6px;">
+                ${avatarHtml(displayName(u.username), getAvatarColor(u.username), 32, false, 'var(--panel)')}
+                <div class="ge-item-info">
+                  <div class="ge-item-name">${escapeHtml(displayName(u.username))}</div>
+                  <div class="ge-item-sub">${u.role === 1 ? "Администратор" : "@" + escapeHtml(u.username)}</div>
+                </div>
+                <div class="ge-item-actions">
+                  ${canTransferAdmin(activeConversation, state.username) && u.username !== state.username && isExistingGroupMember(u.username)
+                    ? `<button class="btn btn-subtle btn-sm" data-group-transfer-admin="${escapeHtml(u.username)}" type="button">Сделать админом</button>` : ""}
+                  ${(canRemoveGroupMember(activeConversation, state.username, u.username) || !isExistingGroupMember(u.username))
+                    ? `<button class="btn btn-danger btn-sm" data-group-remove="${escapeHtml(u.username)}" type="button">Исключить</button>` : ""}
+                </div>
+              </div>
+            `).join("")}
           </div>
         ` : ""}
-      </div>
-    </div>
-  `;
 
-  // ── Group editor ─────────────────────────────────────────────────────────
-  const groupEditorHtml = `
-    <div class="group-editor">
-      <div class="group-editor-hd">
-        <div>
-          <div class="group-editor-title">${state.groupEditorMode === "create" ? "Создание группы" : "Управление участниками"}</div>
-          <div class="group-editor-sub">${state.groupEditorMode === "create" ? "Задайте название и выберите участников через поиск." : "Добавляйте или исключайте участников."}</div>
-        </div>
-        <button id="close-group-editor" class="btn btn-ghost btn-sm" type="button">${ic("close", 16)} Закрыть</button>
-      </div>
-
-      <div>
-        <div class="section-label">Название группы</div>
-        <input id="group-title" placeholder="Название группы" value="${escapeHtml(state.groupTitleDraft)}" ${state.groupEditorMode === "edit" ? "disabled" : ""} />
-      </div>
-
-      <div>
-        <div class="section-label">Поиск участников</div>
-        <input id="group-user-search" placeholder="Начните вводить ник..." value="${escapeHtml(state.groupMemberQuery)}" />
-        <div class="ge-list" style="margin-top:8px;">
-          ${selectableGroupUsers.map((u) => `
-            <button class="ge-search-item" data-group-add="${escapeHtml(u.username)}" type="button">
-              ${avatarHtml(displayName(u.username), getAvatarColor(u.username), 32, false, 'var(--chat-bg)')}
-              <div>
-                <div style="font-size:13px;font-weight:500;">${escapeHtml(displayName(u.username))}</div>
-                <div style="font-size:11px;color:var(--text-muted);">@${escapeHtml(u.username)}</div>
-              </div>
-            </button>
-          `).join("") || `<div style="color:var(--text-muted);font-size:13px;padding:8px 0;">Введите ник для поиска.</div>`}
-        </div>
-      </div>
-
-      <div>
-        <div class="section-label">Участники (${state.groupSelectedMembers.length})</div>
-        <div class="ge-list">
-          ${state.groupSelectedMembers.map((u) => `
-            <div class="ge-item">
-              ${avatarHtml(displayName(u.username), getAvatarColor(u.username), 32, false, 'var(--panel)')}
-              <div class="ge-item-info">
-                <div class="ge-item-name">${escapeHtml(displayName(u.username))}</div>
-                <div class="ge-item-sub">${u.role === 1 ? "Администратор" : (u.addedBy ? `Добавил: @${escapeHtml(u.addedBy)}` : "@" + escapeHtml(u.username))}</div>
-              </div>
-              <div class="ge-item-actions">
-                ${state.groupEditorMode === "edit" && isExistingGroupMember(u.username) && canTransferAdmin(activeConversation, state.username) && u.username !== state.username
-                  ? `<button class="btn btn-subtle btn-sm" data-group-transfer-admin="${escapeHtml(u.username)}" type="button">Сделать админом</button>` : ""}
-                ${(state.groupEditorMode === "create" || canRemoveGroupMember(activeConversation, state.username, u.username) || !isExistingGroupMember(u.username))
-                  ? `<button class="btn btn-danger btn-sm" data-group-remove="${escapeHtml(u.username)}" type="button">${state.groupEditorMode === "edit" && isExistingGroupMember(u.username) ? "Исключить" : ic("close", 14)}</button>` : ""}
-              </div>
-            </div>
-          `).join("") || `<div style="color:var(--text-muted);font-size:13px;padding:8px 0;">Участники пока не выбраны.</div>`}
-        </div>
-      </div>
-
-      <div class="ge-actions">
         ${state.groupEditorMode === "create"
-          ? `<button id="submit-create-group" class="btn btn-primary" type="button">Создать группу</button>`
-          : (activeGroupCanManage ? `<button id="submit-add-group-members" class="btn btn-primary" type="button">Добавить выбранных</button>` : "")}
+          ? `<button id="submit-create-group" class="btn btn-primary btn-full" type="button" ${!state.groupTitleDraft || selectedUsernames.size === 0 ? "disabled" : ""}>
+               Создать группу${selectedUsernames.size > 0 ? ` (${selectedUsernames.size})` : ""}
+             </button>`
+          : (activeGroupCanManage ? `<button id="submit-add-group-members" class="btn btn-primary btn-full" type="button">Добавить выбранных</button>` : "")}
       </div>
     </div>
-  `;
+  ` : "";
+
+  // ── Chat-level derived values (needed by both chat area and profile modals) ─
+  const isGroup     = activeConversation ? activeConversation.kind === 2 : false;
+  const chatLabel   = activeConversation ? conversationLabel(state.profiles, state.profile, activeConversation) : "";
+  const chatPeer    = activeConversation ? (activeConversation.peerUsername || activeConversation.peerProfile?.username || "") : "";
+  const chatOnline  = activeConversation && !isGroup && state.onlineUsers.has(chatPeer);
+  const chatColor   = activeConversation ? (isGroup ? "#5b8dee" : getAvatarColor(chatPeer || chatLabel)) : "";
+  const chatSub     = activeConversation
+    ? (isGroup ? `${activeConversation.memberUsernames?.length || 0} участников` : (chatOnline ? "в сети" : "не в сети"))
+    : "";
+
+  // Search results filtered to current conversation
+  const searchInConv = state.messageSearchQuery.trim()
+    ? state.messageSearchResults.filter((m) => m.conversationId === state.activeConversationId)
+    : [];
+  const searchIdx = Math.min(state.messageSearchIndex, Math.max(0, searchInConv.length - 1));
+  const searchCurrentId = searchInConv[searchIdx]?.messageId ?? 0;
 
   // ── Chat area ────────────────────────────────────────────────────────────
   let chatAreaHtml;
-  if (state.groupEditorOpen) {
-    chatAreaHtml = `<div class="chat-main">${groupEditorHtml}</div>`;
-  } else if (!activeConversation) {
+  if (!activeConversation) {
     chatAreaHtml = `
       <div class="chat-main empty-state">
         <div class="empty-star">✦</div>
@@ -367,49 +655,43 @@ function renderChat() {
       </div>
     `;
   } else {
-    const isGroup = activeConversation.kind === 2;
-    const chatLabel = conversationLabel(state.profiles, state.profile, activeConversation);
-    const chatPeer = activeConversation.peerUsername || activeConversation.peerProfile?.username || "";
-    const chatOnline = !isGroup && state.onlineUsers.has(chatPeer);
-    const chatColor = isGroup ? "#5b8dee" : getAvatarColor(chatPeer || chatLabel);
-    const chatSub = isGroup
-      ? `${activeConversation.memberUsernames?.length || 0} участников`
-      : (chatOnline ? "в сети" : "не в сети");
-
     chatAreaHtml = `
       <div class="chat-main">
         <div class="chat-header">
-          ${avatarHtml(chatLabel, chatColor, 40, chatOnline, 'var(--panel)')}
-          <div class="chat-header-info">
-            <div class="chat-header-name">${escapeHtml(chatLabel)}</div>
-            <div class="chat-header-sub ${chatOnline ? "online-sub" : ""}">
-              ${chatOnline ? `<div class="online-pulse"></div>` : ""}
-              ${escapeHtml(chatSub)}
+          <div class="chat-header-clickable" id="open-conv-profile">
+            ${avatarHtml(chatLabel, chatColor, 40, chatOnline, 'var(--panel)')}
+            <div class="chat-header-info">
+              <div class="chat-header-name">${escapeHtml(chatLabel)}</div>
+              <div class="chat-header-sub ${chatOnline ? "online-sub" : ""}">
+                ${chatOnline ? `<div class="online-pulse"></div>` : ""}
+                ${escapeHtml(chatSub)}
+              </div>
             </div>
           </div>
           <div class="chat-header-actions">
-            ${isGroup ? `<button id="open-edit-group" class="btn btn-subtle btn-sm" type="button">Участники</button>` : ""}
+            ${state.messageSearchOpen ? `
+              <div class="msg-search-wrap">
+                <input id="message-search" class="msg-search-input" placeholder="Поиск по сообщениям..." value="${escapeHtml(state.messageSearchQuery)}" autofocus />
+                <div id="search-nav-area" style="display:contents;">
+                  ${searchInConv.length > 0 ? `
+                    <span class="msg-search-counter">${searchIdx + 1}/${searchInConv.length}</span>
+                    <button id="search-prev" class="icon-btn" type="button">${ic("chevronUp", 15)}</button>
+                    <button id="search-next" class="icon-btn" type="button">${ic("chevronDown", 15)}</button>
+                  ` : ""}
+                </div>
+                <button id="search-clear" class="icon-btn" type="button">${ic("close", 15)}</button>
+              </div>
+            ` : `
+              <button id="open-message-search" class="icon-btn" type="button" title="Поиск">${ic("search", 17)}</button>
+            `}
             ${isGroup ? `<button id="leave-group" class="btn btn-danger btn-sm" type="button">Выйти</button>` : ""}
-            <input id="message-search" class="msg-search-input" placeholder="Поиск..." value="${escapeHtml(state.messageSearchQuery)}" />
-            <button id="search-messages" class="btn btn-subtle btn-sm" type="button">${ic("search", 14)}</button>
           </div>
         </div>
 
         <div class="messages-scroll" id="messages">
-          ${renderMessages(activeMessages)}
+          ${renderMessages(activeMessages, state.messageSearchQuery.trim(), searchCurrentId)}
         </div>
 
-        ${state.messageSearchResults.length > 0 ? `
-          <div class="msg-search-results">
-            <div class="msg-search-label">Найдено</div>
-            ${state.messageSearchResults.map((msg) => `
-              <button class="search-hit-btn" data-search-open="${msg.messageId}" type="button">
-                ${escapeHtml(String(msg.text || "").slice(0, 80))}
-                <small>@${escapeHtml(msg.from)} · ${escapeHtml(formatTimestamp(msg.createdAt))}</small>
-              </button>
-            `).join("")}
-          </div>
-        ` : ""}
 
         <div class="composer-wrap">
           ${selectedMessage ? `
@@ -427,7 +709,135 @@ function renderChat() {
     `;
   }
 
-  app.innerHTML = `<div class="app-layout">${sidebarHtml}${chatAreaHtml}</div>`;
+  // ── Self profile modal ───────────────────────────────────────────────────
+  const selfProfileModal = state.showSelfProfile ? (() => {
+    const editInputStyle = `class="modal-input"`;
+    return `
+      <div class="modal-overlay" id="self-profile-overlay">
+        <div class="modal-card" style="width:min(380px,92vw);">
+          <div class="modal-header">
+            <div class="modal-title">Мой профиль</div>
+            <button id="close-self-profile" class="icon-btn">${ic("close", 18)}</button>
+          </div>
+          <div class="profile-modal-avatar">
+            ${avatarHtml(myName, myColor, 80, true, 'var(--panel)')}
+          </div>
+          ${!state.showProfileEditor ? `
+            <div class="profile-modal-info">
+              <div class="profile-modal-name">${escapeHtml(myName)}</div>
+              <div class="profile-modal-user">@${escapeHtml(state.username)}</div>
+              <div class="profile-modal-status online">
+                <div class="profile-modal-status-dot" style="background:var(--online);"></div>
+                в сети
+              </div>
+            </div>
+            <button id="start-edit-profile" class="btn btn-primary btn-full">
+              ${ic("edit", 15)} Редактировать
+            </button>
+          ` : `
+            <div style="display:grid;gap:10px;">
+              <input id="profile-first-name" ${editInputStyle} placeholder="Имя" value="${escapeHtml(profile.firstName || "")}" />
+              <input id="profile-last-name"  ${editInputStyle} placeholder="Фамилия" value="${escapeHtml(profile.lastName || "")}" />
+              <input id="profile-avatar-hex" ${editInputStyle} placeholder="Цвет аватара (hex)" value="${escapeHtml((profile.avatarHex || "").replace("#", ""))}" />
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button id="save-profile"   class="btn btn-primary" style="flex:1;">Сохранить</button>
+              <button id="cancel-profile" class="btn btn-ghost"   style="flex:1;">Отмена</button>
+            </div>
+            <button id="delete-account" class="btn btn-danger btn-full">Удалить аккаунт</button>
+          `}
+        </div>
+      </div>
+    `;
+  })() : "";
+
+  // ── Conv profile modal (DM or group) ─────────────────────────────────────
+  const convProfileModal = (state.showConvProfile && activeConversation) ? (() => {
+    if (!isGroup) {
+      // DM peer profile
+      const peerOnline = chatOnline;
+      return `
+        <div class="modal-overlay" id="conv-profile-overlay">
+          <div class="modal-card" style="width:min(360px,92vw);">
+            <div class="modal-header">
+              <div class="modal-title">Профиль</div>
+              <button id="close-conv-profile" class="icon-btn">${ic("close", 18)}</button>
+            </div>
+            <div class="profile-modal-avatar">
+              ${avatarHtml(chatLabel, chatColor, 72, peerOnline, 'var(--panel)')}
+            </div>
+            <div class="profile-modal-info">
+              <div class="profile-modal-name">${escapeHtml(chatLabel)}</div>
+              <div class="profile-modal-user">@${escapeHtml(chatPeer)}</div>
+              <div class="profile-modal-status ${peerOnline ? "online" : "offline"}">
+                <div class="profile-modal-status-dot" style="background:${peerOnline ? "var(--online)" : "var(--text-muted)"};"></div>
+                ${peerOnline ? "в сети" : "не в сети"}
+              </div>
+            </div>
+            <div style="border-top:1px solid var(--divider);padding-top:14px;">
+              <button id="send-from-conv-profile" class="btn btn-primary btn-full">
+                ${ic("send", 15)} Написать сообщение
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    } else {
+      // Group profile
+      const members = activeConversation.members?.length
+        ? activeConversation.members
+        : (activeConversation.memberUsernames || []).map((u) => ({ username: u, role: 0 }));
+      const canManage = canManageGroupMembers(activeConversation, state.username);
+
+      const membersHtml = members.map((m) => {
+        const mName = displayName(m.username);
+        const mColor = getAvatarColor(m.username);
+        const mOnline = state.onlineUsers.has(m.username);
+        const isAdmin = m.role === 1;
+        const isSelf = m.username === state.username;
+        return `
+          <div class="group-member-row${isSelf ? "" : " group-member-clickable"}"${isSelf ? "" : ` data-open-peer="${escapeHtml(m.username)}"`}>
+            ${avatarHtml(mName, mColor, 36, mOnline, 'var(--panel)')}
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:13px;font-weight:500;color:var(--text);display:flex;align-items:center;gap:6px;">
+                ${escapeHtml(mName)}
+                ${isAdmin ? `<span class="admin-badge">Админ</span>` : ""}
+              </div>
+              <div style="font-size:11px;color:var(--text-muted);">@${escapeHtml(m.username)}</div>
+            </div>
+            ${mOnline ? `<div class="online-label"><div class="online-label-dot"></div>в сети</div>` : ""}
+          </div>
+        `;
+      }).join("");
+
+      return `
+        <div class="modal-overlay" id="conv-profile-overlay">
+          <div class="modal-card" style="width:min(380px,92vw);">
+            <div class="modal-header">
+              <div class="modal-title">Информация о группе</div>
+              <button id="close-conv-profile" class="icon-btn">${ic("close", 18)}</button>
+            </div>
+            <div class="profile-modal-avatar">
+              ${avatarHtml(chatLabel, chatColor, 72, false, 'var(--panel)')}
+            </div>
+            <div class="profile-modal-info">
+              <div class="profile-modal-name">${escapeHtml(chatLabel)}</div>
+              <div class="profile-modal-user">${members.length} участников</div>
+            </div>
+            <div style="border-top:1px solid var(--divider);padding-top:16px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                <div class="section-label" style="margin:0;">Участники</div>
+                ${canManage ? `<button id="open-edit-group" class="btn-subtle" style="display:flex;align-items:center;gap:4px;">${ic("plus", 13)} Добавить</button>` : ""}
+              </div>
+              ${membersHtml}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+  })() : "";
+
+  app.innerHTML = `<div class="app-layout">${sidebarHtml}${chatAreaHtml}</div>${groupEditorModal}${selfProfileModal}${convProfileModal}${buildSettingsModal()}`;
 
   // Update send button state reactively via input event
   const textarea = document.getElementById("message-text");
@@ -446,16 +856,21 @@ function renderChat() {
   }
 }
 
-function renderMessages(messages) {
+function renderMessages(messages, searchQuery = "", searchCurrentMsgId = 0) {
   if (messages.length === 0) {
     return `<div style="margin:auto;color:var(--text-muted);font-size:14px;text-align:center;">История пока пустая. Отправьте первое сообщение.</div>`;
   }
 
-  const isGroup = state.conversations.find((c) => c.conversationId === state.activeConversationId)?.kind === 2;
+  const convKind = state.conversations.find((c) => c.conversationId === state.activeConversationId)?.kind;
+  const inGroup = convKind === 2;
   let lastDay = "";
+
   return messages.map((msg, i) => {
     const own = msg.from === state.username;
-    const selected = state.selectedMessageId === msg.messageId ? " selected-msg" : "";
+    const isSelectedMsg = state.selectedMessageId === msg.messageId;
+    const isSearchCurrent = searchCurrentMsgId && msg.messageId === searchCurrentMsgId;
+    const isSearchMatch = searchQuery && String(msg.text || "").toLowerCase().includes(searchQuery.toLowerCase());
+
     const senderName = own ? "Вы" : displayName(msg.from);
     const senderColor = own ? "var(--accent)" : getAvatarColor(msg.from);
     const time = shortTime(msg.createdAt);
@@ -471,22 +886,30 @@ function renderMessages(messages) {
     const showDay = day && day !== lastDay;
     if (showDay) lastDay = day;
 
-    const showSender = isGroup && !own && (i === 0 || messages[i - 1].from !== msg.from);
+    const showSender = inGroup && !own && (i === 0 || messages[i - 1].from !== msg.from);
+    const isLast = own && i === messages.length - 1;
+    const avatarEl = !own ? avatarHtml(senderName, senderColor, 28, false, 'var(--chat-bg)') : "";
 
-    const avatarEl = !own
-      ? avatarHtml(senderName, senderColor, 28, false, 'var(--chat-bg)')
-      : "";
+    const bubbleClasses = [
+      "bubble",
+      own ? "bubble-me" : "bubble-other",
+      isSelectedMsg ? "selected-msg" : "",
+      isSearchCurrent ? "search-current" : (isSearchMatch ? "search-match" : ""),
+    ].filter(Boolean).join(" ");
+
+    const bodyText = searchQuery ? highlightText(String(msg.text || ""), searchQuery) : escapeHtml(msg.text || "");
 
     return `
       ${showDay ? `<div class="date-chip"><span>${escapeHtml(day)}</span></div>` : ""}
-      <div class="msg-row ${own ? "msg-me" : ""}">
+      <div class="msg-row ${own ? "msg-me" : ""}" data-message-id="${msg.messageId}">
         ${!own ? avatarEl : ""}
-        <div style="max-width:65%;">
+        <div style="display:flex;flex-direction:column;max-width:65%;min-width:0;">
           ${showSender ? `<div class="bubble-sender" style="color:${senderColor};">${escapeHtml(senderName)}</div>` : ""}
-          <div class="bubble ${own ? "bubble-me" : "bubble-other"}${selected}" data-message-select="${msg.messageId}" style="cursor:pointer;">
-            ${escapeHtml(msg.text || "")}
+          <div class="${bubbleClasses}" data-message-select="${msg.messageId}">
+            ${bodyText}
             <div class="bubble-foot">
               ${escapeHtml(time)}
+              ${own ? doubleCheck(!isLast) : ""}
             </div>
           </div>
         </div>
@@ -629,13 +1052,11 @@ function bindChatEvents() {
     });
   });
 
-  document.getElementById("send-message")?.addEventListener("click", async () => {
+  async function sendCurrentMessage() {
     const textarea = document.getElementById("message-text");
     const text = String(textarea?.value || "").trim();
     const activeConversation = state.conversations.find((item) => item.conversationId === state.activeConversationId);
-    if (!activeConversation || !text) {
-      return;
-    }
+    if (!activeConversation || !text) return;
 
     try {
       const payload = activeConversation.kind === 2
@@ -643,14 +1064,47 @@ function bindChatEvents() {
         : { to: state.activePeer, text };
       const message = await messageClient.sendMessage(payload);
       upsertMessage(message);
-      textarea.value = "";
+      if (textarea) {
+        textarea.value = "";
+        textarea.style.height = "auto"; // сброс высоты после отправки
+      }
       state.selectedMessageId = 0;
       render();
       scrollMessagesToBottom();
     } catch (err) {
       alert(readError(err));
     }
-  });
+  }
+
+  document.getElementById("send-message")?.addEventListener("click", sendCurrentMessage);
+
+  const composerTextarea = document.getElementById("message-text");
+  if (composerTextarea) {
+    // Auto-resize: grows with content up to max-height (10 lines), then scrolls
+    function resizeTextarea() {
+      composerTextarea.style.height = "auto";
+      composerTextarea.style.height = composerTextarea.scrollHeight + "px";
+    }
+    composerTextarea.addEventListener("input", resizeTextarea);
+
+    // Enter = send, Shift+Enter = newline
+    composerTextarea.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendCurrentMessage().then(() => resizeTextarea());
+      }
+    });
+
+    // Mouse wheel scrolls textarea content without propagating to the page
+    composerTextarea.addEventListener("wheel", (e) => {
+      const { scrollTop, scrollHeight, clientHeight } = composerTextarea;
+      const atTop = scrollTop === 0 && e.deltaY < 0;
+      const atBottom = scrollTop + clientHeight >= scrollHeight && e.deltaY > 0;
+      if (!atTop && !atBottom) {
+        e.stopPropagation();
+      }
+    }, { passive: true });
+  }
 
   document.querySelectorAll("[data-message-select]").forEach((element) => {
     element.addEventListener("click", () => {
@@ -674,16 +1128,28 @@ function bindChatEvents() {
     }
   });
 
-  document.getElementById("toggle-profile")?.addEventListener("click", () => {
-    state.showProfileEditor = !state.showProfileEditor;
+  // Own profile modal
+  document.getElementById("open-self-profile")?.addEventListener("click", () => {
+    state.showSelfProfile = true;
+    state.showProfileEditor = false;
     render();
   });
-
+  document.getElementById("close-self-profile")?.addEventListener("click", () => {
+    state.showSelfProfile = false;
+    state.showProfileEditor = false;
+    render();
+  });
+  document.getElementById("self-profile-overlay")?.addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) { state.showSelfProfile = false; state.showProfileEditor = false; render(); }
+  });
+  document.getElementById("start-edit-profile")?.addEventListener("click", () => {
+    state.showProfileEditor = true;
+    render();
+  });
   document.getElementById("cancel-profile")?.addEventListener("click", () => {
     state.showProfileEditor = false;
     render();
   });
-
   document.getElementById("save-profile")?.addEventListener("click", async () => {
     try {
       const profile = await userClient.updateProfile({
@@ -697,6 +1163,52 @@ function bindChatEvents() {
     } catch (err) {
       alert(readError(err));
     }
+  });
+
+  // Conv profile modal (peer / group)
+  document.getElementById("open-conv-profile")?.addEventListener("click", () => {
+    state.showConvProfile = true;
+    render();
+  });
+  document.getElementById("close-conv-profile")?.addEventListener("click", () => {
+    state.showConvProfile = false;
+    render();
+  });
+  document.getElementById("conv-profile-overlay")?.addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) { state.showConvProfile = false; render(); }
+  });
+  document.getElementById("send-from-conv-profile")?.addEventListener("click", () => {
+    state.showConvProfile = false;
+    render();
+  });
+  // Clicking a group member opens a DM with them
+  document.querySelectorAll("[data-open-peer]").forEach((element) => {
+    element.addEventListener("click", async () => {
+      const username = element.getAttribute("data-open-peer");
+      if (!username || username === state.username) return;
+      state.showConvProfile = false;
+      const conversationId = makeConversationId(state.username, username);
+      state.activePeer = username;
+      state.activeConversationId = conversationId;
+      if (!state.conversations.some((item) => item.conversationId === conversationId)) {
+        state.conversations.unshift({ conversationId, peerUsername: username, peerProfile: state.profiles.get(username) || null });
+      }
+      if (!state.messages.has(conversationId)) {
+        state.messages.set(conversationId, []);
+      }
+      await loadMessages({ withUsername: username });
+      render();
+      scrollMessagesToBottom();
+    });
+  });
+
+  // "Добавить" inside group profile opens group editor
+  document.getElementById("open-edit-group")?.addEventListener("click", () => {
+    const conversation = state.conversations.find((item) => item.conversationId === state.activeConversationId);
+    if (!conversation || conversation.kind !== 2) return;
+    state.showConvProfile = false;
+    openGroupEditorForConversation(conversation);
+    render();
   });
 
   document.getElementById("user-search")?.addEventListener("input", async (event) => {
@@ -743,22 +1255,46 @@ function bindChatEvents() {
     });
   });
 
+  document.getElementById("group-title")?.addEventListener("input", (event) => {
+    state.groupTitleDraft = event.target.value;
+    // Update submit button disabled state without full re-render
+    const btn = document.getElementById("submit-create-group");
+    if (btn) btn.disabled = !state.groupTitleDraft || state.groupSelectedMembers.length === 0;
+  });
+
+  let groupSearchTimer = null;
   document.getElementById("group-user-search")?.addEventListener("input", async (event) => {
     state.groupMemberQuery = event.target.value.trim();
+    clearTimeout(groupSearchTimer);
     if (!state.groupMemberQuery) {
       state.groupSearchResults = [];
-      render();
+      patchGroupUserList();
       return;
     }
-    try {
-      const response = await userClient.searchUsers({ query: state.groupMemberQuery, limit: 12 });
-      state.groupSearchResults = response.items;
-      response.items.forEach(applyProfile);
+    groupSearchTimer = setTimeout(async () => {
+      try {
+        const response = await userClient.searchUsers({ query: state.groupMemberQuery, limit: 12 });
+        state.groupSearchResults = response.items;
+        response.items.forEach(applyProfile);
+        patchGroupUserList();
+      } catch (err) {
+        console.error(err);
+      }
+    }, 300);
+  });
+
+  // Close modal when clicking overlay backdrop
+  document.getElementById("group-editor-overlay")?.addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) {
+      state.groupEditorOpen = false;
+      state.groupMemberQuery = "";
+      state.groupSearchResults = [];
       render();
-    } catch (err) {
-      console.error(err);
     }
   });
+
+  // Toggle user selection in group editor modal — direct DOM, no full re-render
+  bindGroupToggleHandlers();
 
   document.querySelectorAll("[data-group-add]").forEach((element) => {
     element.addEventListener("click", () => {
@@ -828,7 +1364,7 @@ function bindChatEvents() {
   });
 
   document.getElementById("submit-create-group")?.addEventListener("click", async () => {
-    const title = String(document.getElementById("group-title")?.value || "").trim();
+    const title = String(document.getElementById("group-title")?.value || state.groupTitleDraft || "").trim();
     if (!title || state.groupSelectedMembers.length === 0) {
       alert("Нужны название группы и хотя бы один участник.");
       return;
@@ -876,36 +1412,91 @@ function bindChatEvents() {
     }
   });
 
-  document.getElementById("search-messages")?.addEventListener("click", async () => {
-    const query = String(document.getElementById("message-search")?.value || "").trim();
-    state.messageSearchQuery = query;
-    if (!query) {
-      state.messageSearchResults = [];
-      render();
-      return;
-    }
-    try {
-      const response = await messageClient.searchMessages({ query, limit: 20 });
-      state.messageSearchResults = response.items;
-      response.items.forEach(upsertMessage);
-      render();
-    } catch (err) {
-      alert(readError(err));
-    }
+  document.getElementById("open-message-search")?.addEventListener("click", () => {
+    state.messageSearchOpen = true;
+    render();
+    document.getElementById("message-search")?.focus();
   });
 
-  document.querySelectorAll("[data-search-open]").forEach((element) => {
-    element.addEventListener("click", async () => {
-      const messageId = Number(element.getAttribute("data-search-open"));
-      const message = findMessageById(messageId);
-      if (!message) {
-        return;
+  let msgSearchTimer = null;
+  document.getElementById("message-search")?.addEventListener("input", async (e) => {
+    const raw = e.target.value;
+    state.messageSearchQuery = raw;
+    state.messageSearchIndex = 0;
+    const query = raw.trim();
+    if (!query) {
+      clearTimeout(msgSearchTimer);
+      state.messageSearchResults = [];
+      patchSearchUI();
+      return;
+    }
+    clearTimeout(msgSearchTimer);
+    msgSearchTimer = setTimeout(async () => {
+      try {
+        const response = await messageClient.searchMessages({ query, limit: 50 });
+        state.messageSearchResults = response.items;
+        response.items.forEach(upsertMessage);
+        patchSearchUI();
+        scrollToCurrentSearchResult();
+      } catch (err) {
+        console.error(err);
       }
-      await openConversation(message.conversationId);
-      state.selectedMessageId = messageId;
+    }, 300);
+  });
+
+  document.getElementById("search-clear")?.addEventListener("click", () => {
+    state.messageSearchOpen = false;
+    state.messageSearchQuery = "";
+    state.messageSearchResults = [];
+    state.messageSearchIndex = 0;
+    render();
+  });
+
+  // ── Settings modal ───────────────────────────────────────────────────────
+  document.getElementById("open-settings")?.addEventListener("click", () => {
+    state.showSettings = true;
+    render();
+  });
+  document.getElementById("close-settings")?.addEventListener("click", () => {
+    state.showSettings = false;
+    render();
+  });
+  document.getElementById("settings-overlay")?.addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) { state.showSettings = false; render(); }
+  });
+  document.querySelectorAll("[data-settings-theme]").forEach((el) => {
+    el.addEventListener("click", () => {
+      state.settings.theme = el.getAttribute("data-settings-theme");
+      applySettings();
       render();
-      scrollMessagesToBottom();
     });
+  });
+  document.querySelectorAll("[data-settings-accent]").forEach((el) => {
+    el.addEventListener("click", () => {
+      state.settings.accent = el.getAttribute("data-settings-accent");
+      applySettings();
+      render();
+    });
+  });
+  document.querySelectorAll("[data-settings-font]").forEach((el) => {
+    el.addEventListener("click", () => {
+      state.settings.font = el.getAttribute("data-settings-font");
+      applySettings();
+      render();
+    });
+  });
+  document.getElementById("toggle-push")?.addEventListener("change", (e) => {
+    state.settings.pushNotifications = e.target.checked;
+    applySettings();
+  });
+  document.getElementById("toggle-sounds")?.addEventListener("change", (e) => {
+    state.settings.messageSounds = e.target.checked;
+    applySettings();
+  });
+  document.getElementById("toggle-compact")?.addEventListener("change", (e) => {
+    state.settings.compactMode = e.target.checked;
+    applySettings();
+    render();
   });
 }
 
@@ -919,6 +1510,7 @@ async function bootstrap() {
 
 async function initializeSession() {
   await Promise.all([loadProfile(), loadConversations()]);
+  loadUnreadCounts();
   render();
   openEventStream();
   if (state.activeConversationId) {
@@ -957,6 +1549,13 @@ async function loadConversations() {
 async function openConversation(conversationId) {
   const conversation = state.conversations.find((item) => item.conversationId === conversationId);
   state.activeConversationId = conversationId;
+  state.showConvProfile = false;
+  state.messageSearchOpen = false;
+  state.messageSearchQuery = "";
+  state.messageSearchResults = [];
+  state.messageSearchIndex = 0;
+  state.localUnread.delete(conversationId);
+  saveUnreadCounts();
   if (conversation?.kind === 2) {
     state.activePeer = "";
   } else {
@@ -1023,16 +1622,23 @@ function handleServerEvent(event) {
     case "presence":
       state.onlineUsers = new Set(event.payload.value.onlineUsers || []);
       break;
-    case "message":
-      upsertMessage(event.payload.value);
-      if (isGroupMessage(event.payload.value) && !state.conversations.some((item) => item.conversationId === event.payload.value.conversationId)) {
+    case "message": {
+      const incomingMsg = event.payload.value;
+      upsertMessage(incomingMsg);
+      // Track unread for non-active conversations with messages from others
+      if (incomingMsg.from !== state.username && incomingMsg.conversationId !== state.activeConversationId) {
+        state.localUnread.set(incomingMsg.conversationId, (state.localUnread.get(incomingMsg.conversationId) || 0) + 1);
+        saveUnreadCounts();
+      }
+      if (isGroupMessage(incomingMsg) && !state.conversations.some((item) => item.conversationId === incomingMsg.conversationId)) {
         void loadConversations().then(() => {
           render();
           scrollMessagesToBottom();
         });
       }
-      ensureConversationForMessage(event.payload.value);
+      ensureConversationForMessage(incomingMsg);
       break;
+    }
     case "profile":
       if (event.payload.value?.profile) {
         applyProfile(event.payload.value.profile);
@@ -1169,6 +1775,23 @@ function findMessageById(messageId) {
   return lookupMessageById(state.messages, messageId);
 }
 
+function saveUnreadCounts() {
+  const obj = {};
+  for (const [k, v] of state.localUnread) obj[k] = v;
+  localStorage.setItem("messenger-unread", JSON.stringify(obj));
+}
+
+function loadUnreadCounts() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("messenger-unread") || "{}");
+    for (const [k, v] of Object.entries(saved)) {
+      if (state.conversations.some((c) => c.conversationId === k)) {
+        state.localUnread.set(k, Number(v));
+      }
+    }
+  } catch {}
+}
+
 function setAuthMessage(message, isError = false, showRegisterPrompt = false) {
   state.authMessage = message;
   state.authError = isError;
@@ -1189,12 +1812,18 @@ function resetSession() {
   state.activePeer = "";
   state.userSearchQuery = "";
   state.userSearchResults = [];
+  state.messageSearchOpen = false;
   state.messageSearchQuery = "";
   state.messageSearchResults = [];
+  state.messageSearchIndex = 0;
+  state.localUnread = new Map();
+  localStorage.removeItem("messenger-unread");
   state.selectedMessageId = 0;
   state.onlineUsers = new Set();
   state.status = "disconnected";
   state.showProfileEditor = false;
+  state.showSelfProfile = false;
+  state.showConvProfile = false;
   setAuthMessage("");
 
   localStorage.removeItem("token");
@@ -1233,6 +1862,17 @@ function readError(err) {
 
 function isUnauthenticated(err) {
   return err instanceof ConnectError && err.code === Code.Unauthenticated;
+}
+
+function scrollToCurrentSearchResult() {
+  const inConv = state.messageSearchResults.filter((m) => m.conversationId === state.activeConversationId);
+  const idx = Math.min(state.messageSearchIndex, Math.max(0, inConv.length - 1));
+  const msgId = inConv[idx]?.messageId;
+  if (!msgId) return;
+  requestAnimationFrame(() => {
+    const el = document.querySelector(`[data-message-id="${msgId}"]`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
 }
 
 function scrollMessagesToBottom() {
