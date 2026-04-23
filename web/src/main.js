@@ -25,6 +25,65 @@ import {
 
 const app = document.getElementById("app");
 
+// ── Design helpers ──────────────────────────────────────────────────────────
+
+const AVATAR_COLORS = ['#5b8dee','#ee5b8d','#5beeca','#eec15b','#c45bee','#7c6fff','#ef4444','#10b981'];
+
+function avatarColorFor(username) {
+  let h = 0;
+  for (let i = 0; i < username.length; i++) h = (h * 31 + username.charCodeAt(i)) | 0;
+  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+}
+
+function getAvatarColor(username) {
+  const p = state.profiles.get(username);
+  if (p?.avatarHex) return `#${p.avatarHex}`;
+  return avatarColorFor(username);
+}
+
+function initials(name) {
+  return (name || '?').split(' ').map(w => w[0] || '').join('').toUpperCase().slice(0, 2) || '?';
+}
+
+function avatarHtml(name, color, size = 38, online = false, borderColor = 'var(--sidebar)') {
+  const dot = Math.round(size * 0.28);
+  return `<div class="avatar" style="width:${size}px;height:${size}px;background:${escapeHtml(color)};font-size:${Math.round(size*0.36)}px;">` +
+    escapeHtml(initials(name)) +
+    (online ? `<div class="avatar-dot" style="width:${dot}px;height:${dot}px;border-color:${borderColor};"></div>` : '') +
+    `</div>`;
+}
+
+const IC = {
+  search:   "M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z",
+  send:     "M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z",
+  logout:   "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
+  plus:     "M12 5v14M5 12h14",
+  settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
+  user:     "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+  trash:    "M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6",
+  close:    "M18 6L6 18M6 6l12 12",
+  check:    "M20 6L9 17l-5-5",
+};
+
+function ic(name, size = 18, color = 'currentColor') {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${IC[name]}"/></svg>`;
+}
+
+function shortTime(timestamp) {
+  if (!timestamp) return '';
+  let d;
+  if (typeof timestamp.toDate === 'function') d = timestamp.toDate();
+  else if (typeof timestamp.seconds === 'bigint') d = new Date(Number(timestamp.seconds) * 1000);
+  else if (typeof timestamp.seconds === 'number') d = new Date(timestamp.seconds * 1000);
+  else return '';
+  return d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
+}
+
+function getLastMessage(conversationId) {
+  const msgs = state.messages.get(conversationId) || [];
+  return msgs[msgs.length - 1] || null;
+}
+
 const state = {
   token: localStorage.getItem("token") || "",
   username: localStorage.getItem("username") || "",
@@ -92,12 +151,12 @@ function render() {
 function renderAuth() {
   const isLogin = state.authMode === "login";
   app.innerHTML = `
-    <main class="shell">
-      <section class="auth-card">
-        <div class="hero">
-          <div class="eyebrow">gRPC-Web Client</div>
-          <h1>Учебный мессенджер</h1>
-          <p>Web-клиент работает через новый protobuf-контракт и общается с сервером по gRPC-Web.</p>
+    <div class="auth-shell">
+      <div class="auth-card">
+        <div class="auth-logo">
+          <div class="auth-logo-icon">✦</div>
+          <h1>Messenger</h1>
+          <p>gRPC-Web клиент</p>
         </div>
 
         <div class="auth-tabs">
@@ -105,22 +164,27 @@ function renderAuth() {
           <button id="auth-register-tab" class="${!isLogin ? "active" : ""}" type="button">Регистрация</button>
         </div>
 
-        <form id="auth-form" class="stack" style="margin-top:16px;">
-          ${isLogin ? "" : `
+        <form id="auth-form" class="auth-form">
+          ${!isLogin ? `
             <div class="split">
-              <input id="first-name" placeholder="Имя" />
-              <input id="last-name" placeholder="Фамилия" />
+              <div class="field"><input id="first-name" placeholder="Имя" /></div>
+              <div class="field"><input id="last-name" placeholder="Фамилия" /></div>
             </div>
-          `}
-          <input id="username" placeholder="nickname" value="${escapeHtml(state.username)}" />
-          <input id="password" type="password" placeholder="password" />
-          ${isLogin ? "" : `<input id="password-repeat" type="password" placeholder="повторите пароль" />`}
-          <button type="submit">${isLogin ? "Войти" : "Создать аккаунт"}</button>
-          <div class="hint ${state.authError ? "error" : ""}">${escapeHtml(state.authMessage)}</div>
-          ${isLogin && state.showRegisterPrompt ? `<button id="suggest-register" class="secondary" type="button">Перейти к регистрации</button>` : ""}
+          ` : ""}
+          <div class="field">
+            <div class="field-icon">${ic("user", 16)}</div>
+            <input id="username" class="has-icon" placeholder="Никнейм" value="${escapeHtml(state.username)}" />
+          </div>
+          <div class="field">
+            <input id="password" type="password" placeholder="Пароль" />
+          </div>
+          ${!isLogin ? `<div class="field"><input id="password-repeat" type="password" placeholder="Повторите пароль" /></div>` : ""}
+          ${state.authMessage ? `<div class="auth-error">${escapeHtml(state.authMessage)}</div>` : ""}
+          <button type="submit" class="btn btn-primary btn-full">${isLogin ? "Войти" : "Создать аккаунт"}</button>
+          ${isLogin && state.showRegisterPrompt ? `<button id="suggest-register" class="btn btn-ghost btn-full" type="button">Перейти к регистрации</button>` : ""}
         </form>
-      </section>
-    </main>
+      </div>
+    </div>
   `;
 }
 
@@ -128,188 +192,252 @@ function renderChat() {
   const activeMessages = getActiveMessages();
   const profile = state.profile || {};
   const activeConversation = state.conversations.find((item) => item.conversationId === state.activeConversationId) || null;
-  const activeProfile = state.activePeer ? state.profiles.get(state.activePeer) || null : null;
   const selectedMessage = findMessageById(state.selectedMessageId);
   const selectableGroupUsers = filterSelectableUsers(state.groupSearchResults, state.groupSelectedMembers, state.username);
-  const activeGroupRole = currentUserRole(activeConversation, state.username);
   const activeGroupCanManage = canManageGroupMembers(activeConversation, state.username);
 
-  app.innerHTML = `
-    <main class="chat-page">
-      <section class="chat-frame">
-        <aside class="sidebar">
-          <div class="chat-top">
-            <div>
-              <div class="eyebrow">Messenger</div>
-              <h1>${escapeHtml(displayName(state.username))}</h1>
-              <p class="muted">@${escapeHtml(state.username)}</p>
-            </div>
-            <div class="pill"><span class="dot ${state.status === "connected" ? "online" : ""}"></span>${escapeHtml(state.status)}</div>
-          </div>
+  const myName = displayName(state.username);
+  const myColor = getAvatarColor(state.username);
 
-          <section class="section">
-            <div class="section-title">
-              <h2>Поиск пользователей</h2>
-            </div>
-            <input id="user-search" placeholder="например, alice" value="${escapeHtml(state.userSearchQuery)}" />
-            <div class="list">
-              ${state.userSearchResults.map((user) => `
-                <button class="user-item" data-user-open="${escapeHtml(user.username)}" type="button">
-                  ${escapeHtml(displayName(user.username))}
-                  <small>@${escapeHtml(user.username)}</small>
-                </button>
-              `).join("") || `<div class="muted">Введите ник для поиска нового диалога.</div>`}
-            </div>
-          </section>
-
-          <section class="section">
-            <div class="section-title">
-              <h2>Диалоги</h2>
-              <button id="open-create-group" class="secondary" type="button">Создать группу</button>
-            </div>
-            <div class="list">
-              ${state.conversations.map((conversation) => {
-                const active = conversation.conversationId === state.activeConversationId ? "active" : "";
-                const peer = conversation.peerUsername || conversation.peerProfile?.username || "";
-                const online = conversation.kind === 2 ? `${conversation.memberUsernames?.length || 0} участников` : (state.onlineUsers.has(peer) ? "в сети" : "offline");
-                return `
-                  <button class="conversation-item ${active}" data-conversation-open="${escapeHtml(conversation.conversationId)}" type="button">
-                    ${escapeHtml(conversationLabel(state.profiles, state.profile, conversation))}
-                    <small>${escapeHtml(online)}</small>
-                  </button>
-                `;
-              }).join("") || `<div class="muted">Диалогов пока нет.</div>`}
-            </div>
-          </section>
-
-          <section class="profile-panel">
-            <div class="section-title">
-              <h3>Профиль</h3>
-              <button id="toggle-profile" class="secondary" type="button">${state.showProfileEditor ? "Скрыть" : "Изменить"}</button>
-            </div>
-            <div>
-              <strong>${escapeHtml(displayName(state.username))}</strong>
-              <div class="muted">@${escapeHtml(state.username)}</div>
-            </div>
-            ${state.showProfileEditor ? `
-              <div class="stack">
-                <input id="profile-first-name" placeholder="Имя" value="${escapeHtml(profile.firstName || "")}" />
-                <input id="profile-last-name" placeholder="Фамилия" value="${escapeHtml(profile.lastName || "")}" />
-                <input id="profile-avatar-hex" placeholder="Цвет аватара, например 23685b" value="${escapeHtml((profile.avatarHex || "").replace("#", ""))}" />
-                <div class="row">
-                  <button id="save-profile" type="button">Сохранить</button>
-                  <button id="cancel-profile" class="secondary" type="button">Отмена</button>
-                </div>
-              </div>
-            ` : ""}
-            <div class="row">
-              <button id="logout" class="secondary" type="button">Выйти</button>
-              <button id="delete-account" class="danger" type="button">Удалить аккаунт</button>
-            </div>
-          </section>
-        </aside>
-
-        <section class="content">
-          ${state.groupEditorOpen ? `
-            <section class="section">
-              <header class="chat-top">
-                <div>
-                  <div class="eyebrow">Группа</div>
-                  <h1>${state.groupEditorMode === "create" ? "Создание группы" : "Управление участниками"}</h1>
-                  <p class="muted">${state.groupEditorMode === "create" ? "Выберите участников через поиск и задайте название." : "Добавляйте участников, удаляйте тех, на кого у вас есть права, и при необходимости передавайте права администратора."}</p>
-                </div>
-                <button id="close-group-editor" class="secondary" type="button">Закрыть</button>
-              </header>
-
-              <div class="section">
-                <input id="group-title" placeholder="название группы" value="${escapeHtml(state.groupTitleDraft)}" ${state.groupEditorMode === "edit" ? "disabled" : ""} />
-                <input id="group-user-search" placeholder="начните вводить ник" value="${escapeHtml(state.groupMemberQuery)}" />
-                <div class="list">
-                  ${selectableGroupUsers.map((user) => `
-                    <button class="user-item" data-group-add="${escapeHtml(user.username)}" type="button">
-                      ${escapeHtml(displayName(user.username))}
-                      <small>@${escapeHtml(user.username)}</small>
-                    </button>
-                  `).join("") || `<div class="muted">Подсказки появятся после поиска пользователей.</div>`}
-                </div>
-              </div>
-
-              <div class="section">
-                <div class="section-title"><h3>Участники</h3></div>
-                <div class="list">
-                  ${state.groupSelectedMembers.map((user) => `
-                    <div class="conversation-item">
-                      ${escapeHtml(displayName(user.username))}
-                      <small>@${escapeHtml(user.username)}</small>
-                      ${user.role === 1 ? `<small>Администратор</small>` : `<small>${user.addedBy ? `Добавил: @${escapeHtml(user.addedBy)}` : "Участник"}</small>`}
-                      <div class="row" style="margin-top:8px;">
-                        ${state.groupEditorMode === "edit" && isExistingGroupMember(user.username) && canTransferAdmin(activeConversation, state.username) && user.username !== state.username ? `<button class="secondary" data-group-transfer-admin="${escapeHtml(user.username)}" type="button">Сделать админом</button>` : ""}
-                        ${(state.groupEditorMode === "create" || canRemoveGroupMember(activeConversation, state.username, user.username) || !isExistingGroupMember(user.username))
-                          ? `<button class="danger" data-group-remove="${escapeHtml(user.username)}" type="button">${state.groupEditorMode === "edit" && isExistingGroupMember(user.username) ? "Исключить" : "Удалить"}</button>`
-                          : ""}
-                      </div>
-                    </div>
-                  `).join("") || `<div class="muted">Участники пока не выбраны.</div>`}
-                </div>
-              </div>
-
-              <div class="row">
-                ${state.groupEditorMode === "create" ? `<button id="submit-create-group" type="button">Создать группу</button>` : `${activeGroupCanManage ? `<button id="submit-add-group-members" type="button">Добавить выбранных участников</button>` : ""}`}
-              </div>
-            </section>
-          ` : `
-          <header class="chat-top">
-            <div>
-              <div class="eyebrow">Диалог</div>
-              <h1>${activeConversation ? escapeHtml(conversationLabel(state.profiles, state.profile, activeConversation)) : "Выберите диалог"}</h1>
-              <p class="muted">${activeConversation ? escapeHtml(conversationMetaLine(state.profiles, state.profile, activeConversation)) : "История и отправка сообщений работают через gRPC-Web."}</p>
-            </div>
-            <div class="row">
-              ${activeConversation?.kind === 2 ? `<button id="open-edit-group" class="secondary" type="button">Участники</button>` : ""}
-              ${activeConversation?.kind === 2 ? `<button id="leave-group" class="danger" type="button">Выйти из группы</button>` : ""}
-              <input id="message-search" placeholder="поиск по сообщениям" value="${escapeHtml(state.messageSearchQuery)}" />
-              <button id="search-messages" class="secondary" type="button">Найти</button>
-            </div>
-          </header>
-
-          <div class="messages" id="messages">
-            ${state.activeConversationId ? renderMessages(activeMessages) : `<div class="empty-state">Сначала выберите существующий диалог или найдите пользователя слева.</div>`}
-          </div>
-
-          ${state.messageSearchResults.length > 0 ? `
-            <section class="section">
-              <div class="section-title"><h3>Найденные сообщения</h3></div>
-              <div class="list">
-                ${state.messageSearchResults.map((message) => `
-                  <button class="search-hit" data-search-open="${message.messageId}" type="button">
-                    ${escapeHtml(message.text)}
-                    <small>@${escapeHtml(message.from)} · ${escapeHtml(formatTimestamp(message.createdAt))}</small>
-                  </button>
-                `).join("")}
-              </div>
-            </section>
-          ` : ""}
-
-          <div class="composer">
-            ${selectedMessage ? `
-              <div class="selected-bar">
-                Выбрано сообщение #${selectedMessage.messageId}. Можно удалить его у всех, если оно отправлено вами.
-              </div>
-            ` : ""}
-            <div class="composer-head">
-              <strong>${activeConversation ? `Сообщение в ${escapeHtml(conversationLabel(state.profiles, state.profile, activeConversation))}` : "Сообщение"}</strong>
-              ${selectedMessage && selectedMessage.from === state.username ? `<button id="delete-message" class="danger" type="button">Удалить выбранное</button>` : ""}
-            </div>
-            <textarea id="message-text" placeholder="привет" ${activeConversation ? "" : "disabled"}></textarea>
-            <div class="row">
-              <button id="send-message" type="button" ${activeConversation ? "" : "disabled"}>Отправить</button>
+  // ── Sidebar ──────────────────────────────────────────────────────────────
+  const sidebarHtml = `
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-header-top">
+          <div class="sidebar-logo"><span class="logo-star">✦</span> Messenger</div>
+          <div style="display:flex;gap:4px;align-items:center;">
+            <div class="status-pill ${state.status === "connected" ? "connected" : ""}">
+              <div class="status-dot"></div>${escapeHtml(state.status)}
             </div>
           </div>
-          `}
-        </section>
-      </section>
-    </main>
+        </div>
+        <div class="search-wrap">
+          <div class="search-icon">${ic("search", 16)}</div>
+          <input id="user-search" placeholder="Найти пользователя..." value="${escapeHtml(state.userSearchQuery)}" />
+        </div>
+      </div>
+
+      ${state.userSearchResults.length > 0 ? `
+        <div class="search-results-panel">
+          <div class="search-results-label">Найдено</div>
+          ${state.userSearchResults.map((u) => `
+            <button class="user-search-item" data-user-open="${escapeHtml(u.username)}" type="button">
+              ${avatarHtml(displayName(u.username), getAvatarColor(u.username), 34, state.onlineUsers.has(u.username))}
+              <div>
+                <div style="font-size:13px;font-weight:500;color:var(--text);">${escapeHtml(displayName(u.username))}</div>
+                <div style="font-size:11px;color:var(--text-muted);">@${escapeHtml(u.username)}</div>
+              </div>
+            </button>
+          `).join("")}
+        </div>
+      ` : ""}
+
+      <div class="convs-scroll">
+        <div class="convs-header">
+          <div class="convs-label">Диалоги</div>
+          <button id="open-create-group" class="btn-subtle" type="button" style="display:flex;align-items:center;gap:4px;">
+            ${ic("plus", 13)} Группа
+          </button>
+        </div>
+        ${state.conversations.map((conv) => {
+          const isGroup = conv.kind === 2;
+          const label = conversationLabel(state.profiles, state.profile, conv);
+          const peer = conv.peerUsername || conv.peerProfile?.username || "";
+          const online = !isGroup && state.onlineUsers.has(peer);
+          const color = isGroup ? "#5b8dee" : getAvatarColor(peer || label);
+          const lastMsg = getLastMessage(conv.conversationId);
+          const lastText = lastMsg ? escapeHtml(String(lastMsg.text || "").slice(0, 40)) : "";
+          const lastTime = lastMsg ? escapeHtml(shortTime(lastMsg.createdAt)) : "";
+          const active = conv.conversationId === state.activeConversationId ? "active" : "";
+          return `
+            <button class="conv-item ${active}" data-conversation-open="${escapeHtml(conv.conversationId)}" type="button">
+              ${avatarHtml(label, color, 44, online)}
+              <div class="conv-body">
+                <div class="conv-top">
+                  <div class="conv-name">${escapeHtml(label)}</div>
+                  ${lastTime ? `<div class="conv-time">${lastTime}</div>` : ""}
+                </div>
+                <div class="conv-bottom">
+                  <div class="conv-last">${lastText || (isGroup ? `${conv.memberUsernames?.length || 0} участников` : (online ? "в сети" : ""))}</div>
+                </div>
+              </div>
+            </button>
+          `;
+        }).join("") || `<div class="convs-empty">Диалогов пока нет.</div>`}
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="profile-row">
+          <div class="profile-clickable" id="toggle-profile">
+            ${avatarHtml(myName, myColor, 38, true)}
+            <div style="min-width:0;">
+              <div class="profile-name">${escapeHtml(myName)}</div>
+              <div class="profile-username">@${escapeHtml(state.username)}</div>
+            </div>
+          </div>
+          <button class="logout-btn" id="logout" title="Выйти">${ic("logout", 16)}</button>
+        </div>
+        ${state.showProfileEditor ? `
+          <div class="profile-editor">
+            <input id="profile-first-name" placeholder="Имя" value="${escapeHtml(profile.firstName || "")}" />
+            <input id="profile-last-name" placeholder="Фамилия" value="${escapeHtml(profile.lastName || "")}" />
+            <input id="profile-avatar-hex" placeholder="Цвет аватара (hex), например 7c6fff" value="${escapeHtml((profile.avatarHex || "").replace("#", ""))}" />
+            <div class="profile-editor-actions">
+              <button id="save-profile" class="btn btn-primary btn-sm" type="button">Сохранить</button>
+              <button id="cancel-profile" class="btn btn-ghost btn-sm" type="button">Отмена</button>
+              <button id="delete-account" class="btn btn-danger btn-sm" type="button">Удалить аккаунт</button>
+            </div>
+          </div>
+        ` : ""}
+      </div>
+    </div>
   `;
+
+  // ── Group editor ─────────────────────────────────────────────────────────
+  const groupEditorHtml = `
+    <div class="group-editor">
+      <div class="group-editor-hd">
+        <div>
+          <div class="group-editor-title">${state.groupEditorMode === "create" ? "Создание группы" : "Управление участниками"}</div>
+          <div class="group-editor-sub">${state.groupEditorMode === "create" ? "Задайте название и выберите участников через поиск." : "Добавляйте или исключайте участников."}</div>
+        </div>
+        <button id="close-group-editor" class="btn btn-ghost btn-sm" type="button">${ic("close", 16)} Закрыть</button>
+      </div>
+
+      <div>
+        <div class="section-label">Название группы</div>
+        <input id="group-title" placeholder="Название группы" value="${escapeHtml(state.groupTitleDraft)}" ${state.groupEditorMode === "edit" ? "disabled" : ""} />
+      </div>
+
+      <div>
+        <div class="section-label">Поиск участников</div>
+        <input id="group-user-search" placeholder="Начните вводить ник..." value="${escapeHtml(state.groupMemberQuery)}" />
+        <div class="ge-list" style="margin-top:8px;">
+          ${selectableGroupUsers.map((u) => `
+            <button class="ge-search-item" data-group-add="${escapeHtml(u.username)}" type="button">
+              ${avatarHtml(displayName(u.username), getAvatarColor(u.username), 32, false, 'var(--chat-bg)')}
+              <div>
+                <div style="font-size:13px;font-weight:500;">${escapeHtml(displayName(u.username))}</div>
+                <div style="font-size:11px;color:var(--text-muted);">@${escapeHtml(u.username)}</div>
+              </div>
+            </button>
+          `).join("") || `<div style="color:var(--text-muted);font-size:13px;padding:8px 0;">Введите ник для поиска.</div>`}
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">Участники (${state.groupSelectedMembers.length})</div>
+        <div class="ge-list">
+          ${state.groupSelectedMembers.map((u) => `
+            <div class="ge-item">
+              ${avatarHtml(displayName(u.username), getAvatarColor(u.username), 32, false, 'var(--panel)')}
+              <div class="ge-item-info">
+                <div class="ge-item-name">${escapeHtml(displayName(u.username))}</div>
+                <div class="ge-item-sub">${u.role === 1 ? "Администратор" : (u.addedBy ? `Добавил: @${escapeHtml(u.addedBy)}` : "@" + escapeHtml(u.username))}</div>
+              </div>
+              <div class="ge-item-actions">
+                ${state.groupEditorMode === "edit" && isExistingGroupMember(u.username) && canTransferAdmin(activeConversation, state.username) && u.username !== state.username
+                  ? `<button class="btn btn-subtle btn-sm" data-group-transfer-admin="${escapeHtml(u.username)}" type="button">Сделать админом</button>` : ""}
+                ${(state.groupEditorMode === "create" || canRemoveGroupMember(activeConversation, state.username, u.username) || !isExistingGroupMember(u.username))
+                  ? `<button class="btn btn-danger btn-sm" data-group-remove="${escapeHtml(u.username)}" type="button">${state.groupEditorMode === "edit" && isExistingGroupMember(u.username) ? "Исключить" : ic("close", 14)}</button>` : ""}
+              </div>
+            </div>
+          `).join("") || `<div style="color:var(--text-muted);font-size:13px;padding:8px 0;">Участники пока не выбраны.</div>`}
+        </div>
+      </div>
+
+      <div class="ge-actions">
+        ${state.groupEditorMode === "create"
+          ? `<button id="submit-create-group" class="btn btn-primary" type="button">Создать группу</button>`
+          : (activeGroupCanManage ? `<button id="submit-add-group-members" class="btn btn-primary" type="button">Добавить выбранных</button>` : "")}
+      </div>
+    </div>
+  `;
+
+  // ── Chat area ────────────────────────────────────────────────────────────
+  let chatAreaHtml;
+  if (state.groupEditorOpen) {
+    chatAreaHtml = `<div class="chat-main">${groupEditorHtml}</div>`;
+  } else if (!activeConversation) {
+    chatAreaHtml = `
+      <div class="chat-main empty-state">
+        <div class="empty-star">✦</div>
+        <div class="empty-title">Выберите диалог</div>
+        <div class="empty-sub">или найдите пользователя для начала переписки</div>
+      </div>
+    `;
+  } else {
+    const isGroup = activeConversation.kind === 2;
+    const chatLabel = conversationLabel(state.profiles, state.profile, activeConversation);
+    const chatPeer = activeConversation.peerUsername || activeConversation.peerProfile?.username || "";
+    const chatOnline = !isGroup && state.onlineUsers.has(chatPeer);
+    const chatColor = isGroup ? "#5b8dee" : getAvatarColor(chatPeer || chatLabel);
+    const chatSub = isGroup
+      ? `${activeConversation.memberUsernames?.length || 0} участников`
+      : (chatOnline ? "в сети" : "не в сети");
+
+    chatAreaHtml = `
+      <div class="chat-main">
+        <div class="chat-header">
+          ${avatarHtml(chatLabel, chatColor, 40, chatOnline, 'var(--panel)')}
+          <div class="chat-header-info">
+            <div class="chat-header-name">${escapeHtml(chatLabel)}</div>
+            <div class="chat-header-sub ${chatOnline ? "online-sub" : ""}">
+              ${chatOnline ? `<div class="online-pulse"></div>` : ""}
+              ${escapeHtml(chatSub)}
+            </div>
+          </div>
+          <div class="chat-header-actions">
+            ${isGroup ? `<button id="open-edit-group" class="btn btn-subtle btn-sm" type="button">Участники</button>` : ""}
+            ${isGroup ? `<button id="leave-group" class="btn btn-danger btn-sm" type="button">Выйти</button>` : ""}
+            <input id="message-search" class="msg-search-input" placeholder="Поиск..." value="${escapeHtml(state.messageSearchQuery)}" />
+            <button id="search-messages" class="btn btn-subtle btn-sm" type="button">${ic("search", 14)}</button>
+          </div>
+        </div>
+
+        <div class="messages-scroll" id="messages">
+          ${renderMessages(activeMessages)}
+        </div>
+
+        ${state.messageSearchResults.length > 0 ? `
+          <div class="msg-search-results">
+            <div class="msg-search-label">Найдено</div>
+            ${state.messageSearchResults.map((msg) => `
+              <button class="search-hit-btn" data-search-open="${msg.messageId}" type="button">
+                ${escapeHtml(String(msg.text || "").slice(0, 80))}
+                <small>@${escapeHtml(msg.from)} · ${escapeHtml(formatTimestamp(msg.createdAt))}</small>
+              </button>
+            `).join("")}
+          </div>
+        ` : ""}
+
+        <div class="composer-wrap">
+          ${selectedMessage ? `
+            <div class="selected-bar">
+              <span>Сообщение #${selectedMessage.messageId} выбрано</span>
+              ${selectedMessage.from === state.username ? `<button id="delete-message" class="btn btn-danger btn-sm" type="button">${ic("trash", 14)} Удалить</button>` : ""}
+            </div>
+          ` : ""}
+          <div class="composer-inner">
+            <textarea id="message-text" placeholder="Написать сообщение..." rows="1"></textarea>
+            <button id="send-message" class="send-btn" type="button">${ic("send", 16)}</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  app.innerHTML = `<div class="app-layout">${sidebarHtml}${chatAreaHtml}</div>`;
+
+  // Update send button state reactively via input event
+  const textarea = document.getElementById("message-text");
+  const sendBtn = document.getElementById("send-message");
+  if (textarea && sendBtn) {
+    const updateSendBtn = () => {
+      sendBtn.classList.toggle("ready", textarea.value.trim().length > 0);
+    };
+    textarea.addEventListener("input", updateSendBtn);
+  }
 
   if (activeConversation) {
     document.title = `${conversationLabel(state.profiles, state.profile, activeConversation)} · Messenger`;
@@ -320,20 +448,49 @@ function renderChat() {
 
 function renderMessages(messages) {
   if (messages.length === 0) {
-    return `<div class="empty-state">История пока пустая. Отправьте первое сообщение.</div>`;
+    return `<div style="margin:auto;color:var(--text-muted);font-size:14px;text-align:center;">История пока пустая. Отправьте первое сообщение.</div>`;
   }
 
-  return messages.map((message) => {
-    const own = message.from === state.username;
-    const selected = state.selectedMessageId === message.messageId ? ' style="outline: 2px solid rgba(31, 107, 95, 0.35);"' : "";
+  const isGroup = state.conversations.find((c) => c.conversationId === state.activeConversationId)?.kind === 2;
+  let lastDay = "";
+  return messages.map((msg, i) => {
+    const own = msg.from === state.username;
+    const selected = state.selectedMessageId === msg.messageId ? " selected-msg" : "";
+    const senderName = own ? "Вы" : displayName(msg.from);
+    const senderColor = own ? "var(--accent)" : getAvatarColor(msg.from);
+    const time = shortTime(msg.createdAt);
+
+    let day = "";
+    if (msg.createdAt) {
+      let d;
+      if (typeof msg.createdAt.toDate === "function") d = msg.createdAt.toDate();
+      else if (typeof msg.createdAt.seconds === "bigint") d = new Date(Number(msg.createdAt.seconds) * 1000);
+      else if (typeof msg.createdAt.seconds === "number") d = new Date(msg.createdAt.seconds * 1000);
+      if (d) day = d.toLocaleDateString("ru", { day: "numeric", month: "long" });
+    }
+    const showDay = day && day !== lastDay;
+    if (showDay) lastDay = day;
+
+    const showSender = isGroup && !own && (i === 0 || messages[i - 1].from !== msg.from);
+
+    const avatarEl = !own
+      ? avatarHtml(senderName, senderColor, 28, false, 'var(--chat-bg)')
+      : "";
+
     return `
-      <button class="message ${own ? "out" : ""}" data-message-select="${message.messageId}" type="button"${selected}>
-        <span class="message-head">
-          <span>${escapeHtml(own ? "Вы" : displayName(message.from))}</span>
-          <span>${escapeHtml(formatTimestamp(message.createdAt))}</span>
-        </span>
-        <span class="message-text">${escapeHtml(message.text)}</span>
-      </button>
+      ${showDay ? `<div class="date-chip"><span>${escapeHtml(day)}</span></div>` : ""}
+      <div class="msg-row ${own ? "msg-me" : ""}">
+        ${!own ? avatarEl : ""}
+        <div style="max-width:65%;">
+          ${showSender ? `<div class="bubble-sender" style="color:${senderColor};">${escapeHtml(senderName)}</div>` : ""}
+          <div class="bubble ${own ? "bubble-me" : "bubble-other"}${selected}" data-message-select="${msg.messageId}" style="cursor:pointer;">
+            ${escapeHtml(msg.text || "")}
+            <div class="bubble-foot">
+              ${escapeHtml(time)}
+            </div>
+          </div>
+        </div>
+      </div>
     `;
   }).join("");
 }
