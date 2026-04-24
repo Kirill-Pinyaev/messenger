@@ -5,8 +5,31 @@ import { Empty } from "@bufbuild/protobuf";
 
 import { createMessengerClients } from "./lib/api.js";
 import { loginFeedback } from "./lib/auth-ui.js";
+import {
+  buildPublishPrekeyBundle,
+  createIdentity,
+  decryptDirectMessageForRecipient,
+  decryptDirectMessageForSender,
+  decryptGroupKeyEnvelope,
+  decryptGroupMessage,
+  deserializeGroupKey,
+  encryptDirectMessage,
+  encryptGroupMessage,
+  exportIdentityState,
+  importIdentityState,
+  markPrekeysAsPublished,
+  serializeGroupKey,
+  topUpOneTimePrekeys,
+  createGroupKeyPackage,
+} from "./lib/e2ee.js";
 import { addDraftMember, filterSelectableUsers, removeDraftMember } from "./lib/group-editor.js";
 import { canManageGroupMembers, canRemoveGroupMember, canTransferAdmin, currentUserRole } from "./lib/group-permissions.js";
+import {
+  isConversationEncryptionEnabled,
+  loadEncryptionPrefs,
+  saveEncryptionPrefs,
+  setConversationEncryption,
+} from "./lib/chat-encryption.js";
 import {
   conversationLabel,
   conversationMetaLine,
@@ -22,8 +45,11 @@ import {
   removeMessageCollection,
   upsertMessageCollection,
 } from "./lib/chat-state.js";
+import { directIdentityErrorMessage, prepareDirectConversation } from "./lib/direct-chat.js";
 
 const app = document.getElementById("app");
+const IDENTITY_STORAGE_PREFIX = "messenger-e2ee-identity:";
+const GROUP_KEYS_STORAGE_PREFIX = "messenger-e2ee-groupkeys:";
 
 // ── Design helpers ──────────────────────────────────────────────────────────
 
@@ -152,6 +178,11 @@ const state = {
     const defaults = { theme: "dark", accent: "#7c6fff", font: "Inter", pushNotifications: true, messageSounds: false, compactMode: false };
     try { return { ...defaults, ...JSON.parse(localStorage.getItem("messenger-settings") || "{}") }; } catch { return defaults; }
   })(),
+  identity: null,
+  identityKeys: new Map(),
+  groupKeys: new Map(),
+  encryptionPrefs: new Map(),
+  e2eeReady: false,
   profileDraft: {
     firstName: "",
     lastName: "",
@@ -190,6 +221,21 @@ function applySettings() {
   localStorage.setItem("messenger-settings", JSON.stringify(s));
 }
 applySettings();
+
+function identityStorageKey(username) {
+  return `${IDENTITY_STORAGE_PREFIX}${username}`;
+}
+
+function groupKeysStorageKey(username) {
+  return `${GROUP_KEYS_STORAGE_PREFIX}${username}`;
+}
+
+async function persistIdentityState() {
+  if (!state.username || !state.identity) {
+    return;
+  }
+  localStorage.setItem(identityStorageKey(state.username), JSON.stringify(await exportIdentityState(state.identity)));
+}
 
 const authInterceptor = (next) => async (req) => {
   if (state.token) {
@@ -461,6 +507,9 @@ function renderChat() {
   const activeMessages = getActiveMessages();
   const profile = state.profile || {};
   const activeConversation = state.conversations.find((item) => item.conversationId === state.activeConversationId) || null;
+  const activeEncryptionEnabled = activeConversation
+    ? isConversationEncryptionEnabled(state.encryptionPrefs, activeConversation.conversationId)
+    : true;
   const selectedMessage = findMessageById(state.selectedMessageId);
   const selectableGroupUsers = filterSelectableUsers(state.groupSearchResults, state.groupSelectedMembers, state.username);
   const activeGroupCanManage = canManageGroupMembers(activeConversation, state.username);
@@ -684,6 +733,11 @@ function renderChat() {
             ` : `
               <button id="open-message-search" class="icon-btn" type="button" title="Поиск">${ic("search", 17)}</button>
             `}
+            <label class="chat-e2ee-toggle" title="Шифрование сообщений в этом чате">
+              <input id="toggle-chat-encryption" type="checkbox" ${activeEncryptionEnabled ? "checked" : ""} />
+              <span class="chat-e2ee-toggle-track"><span class="chat-e2ee-toggle-thumb"></span></span>
+              <span class="chat-e2ee-toggle-label">E2EE</span>
+            </label>
             ${isGroup ? `<button id="leave-group" class="btn btn-danger btn-sm" type="button">Выйти</button>` : ""}
           </div>
         </div>
@@ -898,6 +952,7 @@ function renderMessages(messages, searchQuery = "", searchCurrentMsgId = 0) {
     ].filter(Boolean).join(" ");
 
     const bodyText = searchQuery ? highlightText(String(msg.text || ""), searchQuery) : escapeHtml(msg.text || "");
+    const e2eeBadge = msg.encrypted ? `<span class="bubble-e2ee ${msg.decryptionError ? "error" : ""}">${msg.decryptionError ? "ошибка E2EE" : "E2EE"}</span>` : "";
 
     return `
       ${showDay ? `<div class="date-chip"><span>${escapeHtml(day)}</span></div>` : ""}
@@ -908,6 +963,7 @@ function renderMessages(messages, searchQuery = "", searchCurrentMsgId = 0) {
           <div class="${bubbleClasses}" data-message-select="${msg.messageId}">
             ${bodyText}
             <div class="bubble-foot">
+              ${e2eeBadge}
               ${escapeHtml(time)}
               ${own ? doubleCheck(!isLast) : ""}
             </div>
@@ -1034,7 +1090,18 @@ function bindChatEvents() {
       return;
     }
     try {
-      await userClient.leaveGroupConversation({ conversationId: state.activeConversationId });
+      const conversation = state.conversations.find((item) => item.conversationId === state.activeConversationId);
+      const remainingMembers = (conversation?.members?.length
+        ? conversation.members.map((member) => member.username)
+        : (conversation?.memberUsernames || []))
+        .filter((username) => username !== state.username);
+      let nextKey = undefined;
+      if (remainingMembers.length > 0) {
+        const latest = await userClient.getConversationKey({ conversationId: state.activeConversationId, version: 0 }).catch(() => null);
+        const nextVersion = (latest?.version || 0) + 1;
+        nextKey = (await buildNextGroupKeyUpdate(state.activeConversationId, nextVersion, remainingMembers)).keyUpdate;
+      }
+      await userClient.leaveGroupConversation({ conversationId: state.activeConversationId, nextKey });
     } catch (err) {
       alert(readError(err));
     }
@@ -1057,12 +1124,57 @@ function bindChatEvents() {
     const text = String(textarea?.value || "").trim();
     const activeConversation = state.conversations.find((item) => item.conversationId === state.activeConversationId);
     if (!activeConversation || !text) return;
+    const encryptionEnabled = isConversationEncryptionEnabled(state.encryptionPrefs, activeConversation.conversationId);
 
     try {
-      const payload = activeConversation.kind === 2
-        ? { conversationId: activeConversation.conversationId, text }
-        : { to: state.activePeer, text };
-      const message = await messageClient.sendMessage(payload);
+      let payload;
+      if (!encryptionEnabled) {
+        payload = activeConversation.kind === 2
+          ? {
+            conversationId: activeConversation.conversationId,
+            text,
+            encrypted: false,
+          }
+          : {
+            to: state.activePeer,
+            text,
+            encrypted: false,
+          };
+      } else if (activeConversation.kind === 2) {
+        let version;
+        let groupKeyBytes;
+        try {
+          ({ version, groupKeyBytes } = await loadLatestConversationKey(activeConversation.conversationId));
+        } catch {
+          version = 1;
+          groupKeyBytes = await rotateConversationKey(activeConversation, version);
+        }
+        const encrypted = await encryptGroupMessage(text, groupKeyBytes, version);
+        payload = {
+          conversationId: activeConversation.conversationId,
+          ciphertext: encrypted.ciphertext,
+          nonce: encrypted.nonce,
+          senderKeyId: state.identity.keyId,
+          conversationKeyVersion: version,
+          encrypted: true,
+        };
+      } else {
+        const recipientBundle = await acquirePrekeyBundle(state.activePeer);
+        const encrypted = await encryptDirectMessage(text, state.identity, recipientBundle);
+        payload = {
+          to: state.activePeer,
+          ciphertext: encrypted.ciphertext,
+          nonce: encrypted.nonce,
+          senderKeyId: encrypted.senderKeyId,
+          conversationKeyVersion: 1,
+          encrypted: true,
+          recipientSignedPrekeyId: encrypted.recipientSignedPrekeyId,
+          recipientSignedPrekeyPublic: encrypted.recipientSignedPrekeyPublic,
+          recipientOneTimePrekeyId: encrypted.recipientOneTimePrekeyId,
+          recipientOneTimePrekeyPublic: encrypted.recipientOneTimePrekeyPublic,
+        };
+      }
+      const message = await materializeMessage(await messageClient.sendMessage(payload));
       upsertMessage(message);
       if (textarea) {
         textarea.value = "";
@@ -1072,11 +1184,27 @@ function bindChatEvents() {
       render();
       scrollMessagesToBottom();
     } catch (err) {
+      if (activeConversation.kind !== 2 && state.activePeer) {
+        alert(directIdentityErrorMessage(err, state.activePeer));
+        return;
+      }
       alert(readError(err));
     }
   }
 
   document.getElementById("send-message")?.addEventListener("click", sendCurrentMessage);
+  document.getElementById("toggle-chat-encryption")?.addEventListener("change", (event) => {
+    if (!state.activeConversationId) {
+      return;
+    }
+    state.encryptionPrefs = setConversationEncryption(
+      state.encryptionPrefs,
+      state.activeConversationId,
+      event.target.checked,
+    );
+    saveEncryptionPrefs(state.username, state.encryptionPrefs, localStorage);
+    render();
+  });
 
   const composerTextarea = document.getElementById("message-text");
   if (composerTextarea) {
@@ -1187,18 +1315,25 @@ function bindChatEvents() {
       const username = element.getAttribute("data-open-peer");
       if (!username || username === state.username) return;
       state.showConvProfile = false;
-      const conversationId = makeConversationId(state.username, username);
       state.activePeer = username;
-      state.activeConversationId = conversationId;
-      if (!state.conversations.some((item) => item.conversationId === conversationId)) {
-        state.conversations.unshift({ conversationId, peerUsername: username, peerProfile: state.profiles.get(username) || null });
-      }
-      if (!state.messages.has(conversationId)) {
-        state.messages.set(conversationId, []);
-      }
-      await loadMessages({ withUsername: username });
+      const next = prepareDirectConversation({
+        conversations: state.conversations,
+        messages: state.messages,
+        profiles: state.profiles,
+        selfUsername: state.username,
+        peerUsername: username,
+      });
+      state.activeConversationId = next.conversationId;
+      state.conversations = next.conversations;
+      state.messages = next.messages;
       render();
-      scrollMessagesToBottom();
+      try {
+        await loadMessages({ withUsername: username });
+        render();
+        scrollMessagesToBottom();
+      } catch (err) {
+        alert(readError(err));
+      }
     });
   });
 
@@ -1236,22 +1371,25 @@ function bindChatEvents() {
         return;
       }
 
-      const conversationId = makeConversationId(state.username, username);
       state.activePeer = username;
-      state.activeConversationId = conversationId;
-      if (!state.messages.has(conversationId)) {
-        state.messages.set(conversationId, []);
-      }
-      if (!state.conversations.some((item) => item.conversationId === conversationId)) {
-        state.conversations.unshift({
-          conversationId,
-          peerUsername: username,
-          peerProfile: state.profiles.get(username) || null,
-        });
-      }
-      await loadMessages({ withUsername: username });
+      const next = prepareDirectConversation({
+        conversations: state.conversations,
+        messages: state.messages,
+        profiles: state.profiles,
+        selfUsername: state.username,
+        peerUsername: username,
+      });
+      state.activeConversationId = next.conversationId;
+      state.conversations = next.conversations;
+      state.messages = next.messages;
       render();
-      scrollMessagesToBottom();
+      try {
+        await loadMessages({ withUsername: username });
+        render();
+        scrollMessagesToBottom();
+      } catch (err) {
+        alert(readError(err));
+      }
     });
   });
 
@@ -1323,10 +1461,20 @@ function bindChatEvents() {
           return;
         }
         try {
+          const currentConversation = state.conversations.find((item) => item.conversationId === state.groupEditorConversationId);
+          const remainingMembers = (currentConversation?.members?.length
+            ? currentConversation.members.map((member) => member.username)
+            : (currentConversation?.memberUsernames || []))
+            .filter((memberUsername) => memberUsername !== username);
+          const latest = await userClient.getConversationKey({ conversationId: state.groupEditorConversationId, version: 0 }).catch(() => null);
+          const nextVersion = (latest?.version || 0) + 1;
+          const nextKey = await buildNextGroupKeyUpdate(state.groupEditorConversationId, nextVersion, remainingMembers);
           const conversation = await userClient.removeGroupMember({
             conversationId: state.groupEditorConversationId,
             username,
+            nextKey: nextKey.keyUpdate,
           });
+          rememberConversationKey(conversation.conversationId, nextVersion, nextKey.groupKeyBytes);
           replaceConversation(conversation);
           state.groupSelectedMembers = groupMembersForEditor(conversation);
           if (state.activeConversationId === conversation.conversationId) {
@@ -1370,10 +1518,14 @@ function bindChatEvents() {
       return;
     }
     try {
+      const members = [state.username, ...state.groupSelectedMembers.map((item) => item.username)];
+      const initialKey = await buildNextGroupKeyUpdate("pending-group", 1, members);
       const conversation = await userClient.createGroupConversation({
         title,
         memberUsernames: state.groupSelectedMembers.map((item) => item.username),
+        initialKey: initialKey.keyUpdate,
       });
+      rememberConversationKey(conversation.conversationId, 1, initialKey.groupKeyBytes);
       replaceConversation(conversation);
       state.activeConversationId = conversation.conversationId;
       state.activePeer = "";
@@ -1400,10 +1552,16 @@ function bindChatEvents() {
       return;
     }
     try {
+      const nextMembers = [...existingMembers, ...additions];
+      const latest = await userClient.getConversationKey({ conversationId: state.groupEditorConversationId, version: 0 }).catch(() => null);
+      const nextVersion = (latest?.version || 0) + 1;
+      const nextKey = await buildNextGroupKeyUpdate(state.groupEditorConversationId, nextVersion, nextMembers);
       const conversation = await userClient.addGroupMembers({
         conversationId: state.groupEditorConversationId,
         memberUsernames: additions,
+        nextKey: nextKey.keyUpdate,
       });
+      rememberConversationKey(conversation.conversationId, nextVersion, nextKey.groupKeyBytes);
       replaceConversation(conversation);
       openGroupEditorForConversation(conversation);
       render();
@@ -1433,9 +1591,11 @@ function bindChatEvents() {
     clearTimeout(msgSearchTimer);
     msgSearchTimer = setTimeout(async () => {
       try {
-        const response = await messageClient.searchMessages({ query, limit: 50 });
-        state.messageSearchResults = response.items;
-        response.items.forEach(upsertMessage);
+        const normalized = query.toLowerCase();
+        state.messageSearchResults = [...state.messages.values()]
+          .flat()
+          .filter((message) => String(message.text || "").toLowerCase().includes(normalized))
+          .slice(-50);
         patchSearchUI();
         scrollToCurrentSearchResult();
       } catch (err) {
@@ -1509,8 +1669,11 @@ async function bootstrap() {
 }
 
 async function initializeSession() {
+  await ensureIdentityReady();
   await Promise.all([loadProfile(), loadConversations()]);
   loadUnreadCounts();
+  loadStoredGroupKeys();
+  state.encryptionPrefs = loadEncryptionPrefs(state.username, localStorage);
   render();
   openEventStream();
   if (state.activeConversationId) {
@@ -1572,7 +1735,8 @@ async function loadMessages({ conversationId = "", withUsername = "" }) {
   });
 
   const targetId = conversationId || makeConversationId(state.username, withUsername);
-  state.messages.set(targetId, response.items || []);
+  const items = await Promise.all((response.items || []).map((message) => materializeMessage(message)));
+  state.messages.set(targetId, items);
 }
 
 function openEventStream() {
@@ -1624,20 +1788,27 @@ function handleServerEvent(event) {
       break;
     case "message": {
       const incomingMsg = event.payload.value;
-      upsertMessage(incomingMsg);
-      // Track unread for non-active conversations with messages from others
-      if (incomingMsg.from !== state.username && incomingMsg.conversationId !== state.activeConversationId) {
-        state.localUnread.set(incomingMsg.conversationId, (state.localUnread.get(incomingMsg.conversationId) || 0) + 1);
-        saveUnreadCounts();
-      }
-      if (isGroupMessage(incomingMsg) && !state.conversations.some((item) => item.conversationId === incomingMsg.conversationId)) {
-        void loadConversations().then(() => {
-          render();
+      void materializeMessage(incomingMsg).then((message) => {
+        upsertMessage(message);
+        if (message.from !== state.username && message.conversationId !== state.activeConversationId) {
+          state.localUnread.set(message.conversationId, (state.localUnread.get(message.conversationId) || 0) + 1);
+          saveUnreadCounts();
+        }
+        if (isGroupMessage(message) && !state.conversations.some((item) => item.conversationId === message.conversationId)) {
+          void loadConversations().then(() => {
+            render();
+            scrollMessagesToBottom();
+          });
+        }
+        ensureConversationForMessage(message);
+        render();
+        if (message.conversationId === state.activeConversationId) {
           scrollMessagesToBottom();
-        });
-      }
-      ensureConversationForMessage(incomingMsg);
-      break;
+        }
+      }).catch((error) => {
+        console.error(error);
+      });
+      return;
     }
     case "profile":
       if (event.payload.value?.profile) {
@@ -1661,9 +1832,6 @@ function handleServerEvent(event) {
   }
 
   render();
-  if (event.payload.case === "message" && event.payload.value.conversationId === state.activeConversationId) {
-    scrollMessagesToBottom();
-  }
 }
 
 function ensureConversationForMessage(message) {
@@ -1739,6 +1907,12 @@ function isExistingGroupMember(username) {
 function handleConversationRemoved(conversationId) {
   state.conversations = removeConversationById(state.conversations, conversationId);
   state.messages.delete(conversationId);
+  for (const key of [...state.groupKeys.keys()]) {
+    if (key.startsWith(`${conversationId}:`)) {
+      state.groupKeys.delete(key);
+    }
+  }
+  saveStoredGroupKeys();
 
   if (state.groupEditorOpen && state.groupEditorConversationId === conversationId) {
     state.groupEditorOpen = false;
@@ -1765,6 +1939,202 @@ function handleConversationRemoved(conversationId) {
 
 function removeMessage(messageId) {
   state.messages = removeMessageCollection(state.messages, messageId);
+}
+
+function loadStoredGroupKeys() {
+  state.groupKeys = new Map();
+  if (!state.username) {
+    return;
+  }
+  try {
+    const raw = JSON.parse(localStorage.getItem(groupKeysStorageKey(state.username)) || "{}");
+    for (const [key, value] of Object.entries(raw)) {
+      state.groupKeys.set(key, deserializeGroupKey(value));
+    }
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+function saveStoredGroupKeys() {
+  if (!state.username) {
+    return;
+  }
+  const raw = {};
+  for (const [key, value] of state.groupKeys.entries()) {
+    raw[key] = serializeGroupKey(value);
+  }
+  localStorage.setItem(groupKeysStorageKey(state.username), JSON.stringify(raw));
+}
+
+function conversationKeyCacheKey(conversationId, version) {
+  return `${conversationId}:${version}`;
+}
+
+function rememberConversationKey(conversationId, version, groupKeyBytes) {
+  state.groupKeys.set(conversationKeyCacheKey(conversationId, version), groupKeyBytes);
+  saveStoredGroupKeys();
+}
+
+function getRememberedConversationKey(conversationId, version) {
+  return state.groupKeys.get(conversationKeyCacheKey(conversationId, version)) || null;
+}
+
+async function ensureIdentityReady() {
+  const stored = localStorage.getItem(identityStorageKey(state.username));
+  if (stored) {
+    state.identity = await importIdentityState(JSON.parse(stored));
+  } else {
+    state.identity = await createIdentity(state.username);
+  }
+  state.identity = await topUpOneTimePrekeys(state.identity, 5);
+  await persistIdentityState();
+
+  const published = await userClient.publishIdentityKey({
+    keyId: state.identity.keyId,
+    algorithm: state.identity.algorithm,
+    publicKey: state.identity.publicKeyBytes,
+  });
+  state.identityKeys.set(state.username, published);
+  await userClient.publishPrekeyBundle(buildPublishPrekeyBundle(state.identity));
+  state.identity = markPrekeysAsPublished(state.identity);
+  await persistIdentityState();
+  state.e2eeReady = true;
+}
+
+async function fetchIdentityKey(username) {
+  if (state.identityKeys.has(username)) {
+    return state.identityKeys.get(username);
+  }
+  const key = await userClient.getIdentityKey({ username });
+  state.identityKeys.set(username, key);
+  return key;
+}
+
+async function fetchIdentityKeys(usernames) {
+  const unique = [...new Set(usernames.filter(Boolean))];
+  const missing = unique.filter((username) => !state.identityKeys.has(username));
+  if (missing.length > 0) {
+    const response = await userClient.getIdentityKeys({ usernames: missing });
+    for (const item of response.items) {
+      state.identityKeys.set(item.username, item);
+    }
+  }
+  const unresolved = unique.filter((username) => !state.identityKeys.has(username));
+  if (unresolved.length > 0) {
+    throw new Error(`У пользователей ещё нет опубликованных ключей: ${unresolved.join(", ")}`);
+  }
+  return unique.map((username) => state.identityKeys.get(username));
+}
+
+async function acquirePrekeyBundle(username) {
+  return userClient.acquirePrekeyBundle({ username });
+}
+
+async function loadConversationKey(conversationId, version) {
+  const cached = getRememberedConversationKey(conversationId, version);
+  if (cached) {
+    return cached;
+  }
+
+  const keyPackage = await userClient.getConversationKey({ conversationId, version });
+  const envelope = keyPackage.envelopes.find((item) => item.username === state.username);
+  if (!envelope) {
+    throw new Error("group key envelope not found");
+  }
+  const senderIdentity = await fetchIdentityKey(keyPackage.createdBy);
+  const groupKeyBytes = await decryptGroupKeyEnvelope(envelope, state.identity, senderIdentity.publicKey);
+  rememberConversationKey(conversationId, version, groupKeyBytes);
+  return groupKeyBytes;
+}
+
+async function loadLatestConversationKey(conversationId) {
+  const keyPackage = await userClient.getConversationKey({ conversationId, version: 0 });
+  const cached = getRememberedConversationKey(conversationId, keyPackage.version);
+  if (cached) {
+    return { version: keyPackage.version, groupKeyBytes: cached };
+  }
+  const envelope = keyPackage.envelopes.find((item) => item.username === state.username);
+  if (!envelope) {
+    throw new Error("latest group key envelope not found");
+  }
+  const senderIdentity = await fetchIdentityKey(keyPackage.createdBy);
+  const groupKeyBytes = await decryptGroupKeyEnvelope(envelope, state.identity, senderIdentity.publicKey);
+  rememberConversationKey(conversationId, keyPackage.version, groupKeyBytes);
+  return { version: keyPackage.version, groupKeyBytes };
+}
+
+async function rotateConversationKey(conversation, version) {
+  const members = conversation.members?.length
+    ? conversation.members.map((member) => member.username)
+    : (conversation.memberUsernames || []);
+  const identities = await fetchIdentityKeys(members);
+  const packageData = await createGroupKeyPackage(
+    conversation.conversationId,
+    version,
+    state.identity,
+    identities.map((identity) => ({
+      username: identity.username,
+      keyId: identity.keyId,
+      publicKeyBytes: identity.publicKey,
+    })),
+  );
+  await userClient.upsertConversationKey({
+    conversationId: packageData.conversationId,
+    version: packageData.version,
+    algorithm: packageData.algorithm,
+    envelopes: packageData.envelopes,
+  });
+  rememberConversationKey(conversation.conversationId, version, packageData.groupKeyBytes);
+  return packageData.groupKeyBytes;
+}
+
+async function buildNextGroupKeyUpdate(conversationId, version, members) {
+  const identities = await fetchIdentityKeys(members);
+  const packageData = await createGroupKeyPackage(
+    conversationId,
+    version,
+    state.identity,
+    identities.map((identity) => ({
+      username: identity.username,
+      keyId: identity.keyId,
+      publicKeyBytes: identity.publicKey,
+    })),
+  );
+  return {
+    keyUpdate: {
+      version: packageData.version,
+      algorithm: packageData.algorithm,
+      envelopes: packageData.envelopes,
+    },
+    groupKeyBytes: packageData.groupKeyBytes,
+  };
+}
+
+async function materializeMessage(message) {
+  if (!message?.encrypted) {
+    return message;
+  }
+
+  try {
+    if (message.conversationId === message.to) {
+      const groupKeyBytes = await loadConversationKey(message.conversationId, message.conversationKeyVersion);
+      const text = await decryptGroupMessage(message, groupKeyBytes);
+      return { ...message, text, decryptionError: false };
+    }
+
+    let text;
+    if (message.from === state.username) {
+      text = await decryptDirectMessageForSender(message, state.identity);
+    } else {
+      const senderIdentity = await fetchIdentityKey(message.from);
+      text = await decryptDirectMessageForRecipient(message, state.identity, senderIdentity.publicKey);
+    }
+    return { ...message, text, decryptionError: false };
+  } catch (error) {
+    console.error(error);
+    return { ...message, text: "[Не удалось расшифровать]", decryptionError: true };
+  }
 }
 
 function getActiveMessages() {
@@ -1808,6 +2178,11 @@ function resetSession() {
   state.conversations = [];
   state.messages = new Map();
   state.profiles = new Map();
+  state.identity = null;
+  state.identityKeys = new Map();
+  state.groupKeys = new Map();
+  state.encryptionPrefs = new Map();
+  state.e2eeReady = false;
   state.activeConversationId = "";
   state.activePeer = "";
   state.userSearchQuery = "";

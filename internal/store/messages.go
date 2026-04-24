@@ -17,6 +17,15 @@ type Message struct {
 	From           string
 	To             string
 	Text           string
+	Ciphertext     []byte
+	Nonce          []byte
+	SenderKeyID    string
+	KeyVersion     int32
+	Encrypted      bool
+	RecipientSignedPrekeyID     string
+	RecipientSignedPrekeyPublic []byte
+	RecipientOneTimePrekeyID    string
+	RecipientOneTimePrekeyPublic []byte
 	TS             time.Time
 }
 
@@ -46,11 +55,21 @@ func (s *MemoryMessageStore) Save(_ context.Context, msg Message) (Message, erro
 	if msg.ConversationID == "" || msg.From == "" || msg.To == "" {
 		return Message{}, ErrBadInput
 	}
+	if !msg.Encrypted && strings.TrimSpace(msg.Text) == "" {
+		return Message{}, ErrBadInput
+	}
+	if msg.Encrypted && (len(msg.Ciphertext) == 0 || len(msg.Nonce) == 0 || msg.SenderKeyID == "") {
+		return Message{}, ErrBadInput
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.nextID++
 	msg.ID = s.nextID
+	msg.Ciphertext = append([]byte(nil), msg.Ciphertext...)
+	msg.Nonce = append([]byte(nil), msg.Nonce...)
+	msg.RecipientSignedPrekeyPublic = append([]byte(nil), msg.RecipientSignedPrekeyPublic...)
+	msg.RecipientOneTimePrekeyPublic = append([]byte(nil), msg.RecipientOneTimePrekeyPublic...)
 	s.byConv[msg.ConversationID] = append(s.byConv[msg.ConversationID], msg)
 	return msg, nil
 }
@@ -77,6 +96,12 @@ func (s *MemoryMessageStore) History(_ context.Context, conversationID string, l
 
 	out := make([]Message, limit)
 	copy(out, msgs[len(msgs)-limit:])
+	for i := range out {
+		out[i].Ciphertext = append([]byte(nil), out[i].Ciphertext...)
+		out[i].Nonce = append([]byte(nil), out[i].Nonce...)
+		out[i].RecipientSignedPrekeyPublic = append([]byte(nil), out[i].RecipientSignedPrekeyPublic...)
+		out[i].RecipientOneTimePrekeyPublic = append([]byte(nil), out[i].RecipientOneTimePrekeyPublic...)
+	}
 	return out, nil
 }
 
@@ -171,6 +196,10 @@ func (s *MemoryMessageStore) GetByID(_ context.Context, id int64) (Message, erro
 	for _, msgs := range s.byConv {
 		for _, msg := range msgs {
 			if msg.ID == id {
+				msg.Ciphertext = append([]byte(nil), msg.Ciphertext...)
+				msg.Nonce = append([]byte(nil), msg.Nonce...)
+				msg.RecipientSignedPrekeyPublic = append([]byte(nil), msg.RecipientSignedPrekeyPublic...)
+				msg.RecipientOneTimePrekeyPublic = append([]byte(nil), msg.RecipientOneTimePrekeyPublic...)
 				return msg, nil
 			}
 		}

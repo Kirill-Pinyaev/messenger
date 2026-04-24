@@ -2,12 +2,10 @@ FROM node:22-alpine AS webbuild
 
 WORKDIR /src
 RUN apk add --no-cache unzip curl
-RUN curl -L -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-x86_64.zip \
-	&& rm -rf /tmp/protoc29 \
-	&& mkdir -p /tmp/protoc29 \
-	&& unzip -oq /tmp/protoc.zip -d /tmp/protoc29
 COPY api ./api
+COPY scripts ./scripts
 COPY web ./web
+RUN chmod +x /src/scripts/protoc.sh
 WORKDIR /src/web
 RUN npm ci
 RUN npm run build

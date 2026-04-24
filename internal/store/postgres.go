@@ -25,12 +25,34 @@ func (s *PostgresMessageStore) Save(ctx context.Context, msg Message) (Message, 
 	if msg.ConversationID == "" || msg.From == "" || msg.To == "" {
 		return Message{}, ErrBadInput
 	}
+	if !msg.Encrypted && strings.TrimSpace(msg.Text) == "" {
+		return Message{}, ErrBadInput
+	}
+	if msg.Encrypted && (len(msg.Ciphertext) == 0 || len(msg.Nonce) == 0 || msg.SenderKeyID == "") {
+		return Message{}, ErrBadInput
+	}
+	if msg.Ciphertext == nil {
+		msg.Ciphertext = []byte{}
+	}
+	if msg.Nonce == nil {
+		msg.Nonce = []byte{}
+	}
+	if msg.RecipientSignedPrekeyPublic == nil {
+		msg.RecipientSignedPrekeyPublic = []byte{}
+	}
+	if msg.RecipientOneTimePrekeyPublic == nil {
+		msg.RecipientOneTimePrekeyPublic = []byte{}
+	}
 
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO messages (conversation_id, sender, recipient, body, ts)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO messages (
+			conversation_id, sender, recipient, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
+			recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public, ts
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING id
-	`, msg.ConversationID, msg.From, msg.To, msg.Text, msg.TS).Scan(&msg.ID)
+	`, msg.ConversationID, msg.From, msg.To, msg.Text, msg.Ciphertext, msg.Nonce, msg.SenderKeyID, msg.KeyVersion, msg.Encrypted,
+		msg.RecipientSignedPrekeyID, msg.RecipientSignedPrekeyPublic, msg.RecipientOneTimePrekeyID, msg.RecipientOneTimePrekeyPublic, msg.TS).Scan(&msg.ID)
 	if err != nil {
 		return Message{}, err
 	}
@@ -46,7 +68,8 @@ func (s *PostgresMessageStore) History(ctx context.Context, conversationID strin
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, conversation_id, sender, recipient, body, ts
+		SELECT id, conversation_id, sender, recipient, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
+		       recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public, ts
 		FROM messages
 		WHERE conversation_id = $1
 		ORDER BY ts DESC
@@ -60,7 +83,8 @@ func (s *PostgresMessageStore) History(ctx context.Context, conversationID strin
 	var out []Message
 	for rows.Next() {
 		var msg Message
-		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.Text, &msg.TS); err != nil {
+		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.Text, &msg.Ciphertext, &msg.Nonce, &msg.SenderKeyID, &msg.KeyVersion, &msg.Encrypted,
+			&msg.RecipientSignedPrekeyID, &msg.RecipientSignedPrekeyPublic, &msg.RecipientOneTimePrekeyID, &msg.RecipientOneTimePrekeyPublic, &msg.TS); err != nil {
 			return nil, err
 		}
 		out = append(out, msg)
@@ -128,12 +152,14 @@ func (s *PostgresMessageStore) SearchMessages(ctx context.Context, username, que
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, conversation_id, sender, recipient, body, ts
+		SELECT id, conversation_id, sender, recipient, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
+		       recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public, ts
 		FROM messages
 		WHERE (sender = $1 OR recipient = $1
 		       OR conversation_id IN (
 		           SELECT conversation_id FROM conversation_members WHERE username = $1
 		       ))
+		  AND encrypted = FALSE
 		  AND body ILIKE $2
 		ORDER BY ts DESC
 		LIMIT $3
@@ -146,7 +172,8 @@ func (s *PostgresMessageStore) SearchMessages(ctx context.Context, username, que
 	var out []Message
 	for rows.Next() {
 		var msg Message
-		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.Text, &msg.TS); err != nil {
+		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.Text, &msg.Ciphertext, &msg.Nonce, &msg.SenderKeyID, &msg.KeyVersion, &msg.Encrypted,
+			&msg.RecipientSignedPrekeyID, &msg.RecipientSignedPrekeyPublic, &msg.RecipientOneTimePrekeyID, &msg.RecipientOneTimePrekeyPublic, &msg.TS); err != nil {
 			return nil, err
 		}
 		out = append(out, msg)
@@ -164,10 +191,12 @@ func (s *PostgresMessageStore) GetByID(ctx context.Context, id int64) (Message, 
 
 	var msg Message
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, conversation_id, sender, recipient, body, ts
+		SELECT id, conversation_id, sender, recipient, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
+		       recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public, ts
 		FROM messages
 		WHERE id = $1
-	`, id).Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.Text, &msg.TS)
+	`, id).Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.Text, &msg.Ciphertext, &msg.Nonce, &msg.SenderKeyID, &msg.KeyVersion, &msg.Encrypted,
+		&msg.RecipientSignedPrekeyID, &msg.RecipientSignedPrekeyPublic, &msg.RecipientOneTimePrekeyID, &msg.RecipientOneTimePrekeyPublic, &msg.TS)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Message{}, ErrMessageNotFound
@@ -201,6 +230,15 @@ func (s *PostgresMessageStore) initSchema(ctx context.Context) error {
 			sender TEXT NOT NULL,
 			recipient TEXT NOT NULL,
 			body TEXT NOT NULL,
+			ciphertext BYTEA NOT NULL DEFAULT ''::bytea,
+			nonce BYTEA NOT NULL DEFAULT ''::bytea,
+			sender_key_id TEXT NOT NULL DEFAULT '',
+			conversation_key_version INTEGER NOT NULL DEFAULT 0,
+			encrypted BOOLEAN NOT NULL DEFAULT FALSE,
+			recipient_signed_prekey_id TEXT NOT NULL DEFAULT '',
+			recipient_signed_prekey_public BYTEA NOT NULL DEFAULT ''::bytea,
+			recipient_one_time_prekey_id TEXT NOT NULL DEFAULT '',
+			recipient_one_time_prekey_public BYTEA NOT NULL DEFAULT ''::bytea,
 			ts TIMESTAMPTZ NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS messages_conversation_ts_idx

@@ -222,6 +222,54 @@ func TestPostgresStoresIntegration(t *testing.T) {
 		t.Fatalf("SearchMessages(group) = %+v", groupFound)
 	}
 
+	keyStore, err := NewPostgresKeyStore(ctx, pool)
+	if err != nil {
+		t.Fatalf("NewPostgresKeyStore() error = %v", err)
+	}
+
+	identityKey, err := keyStore.UpsertIdentityKey(ctx, IdentityKey{
+		Username:  "alice",
+		KeyID:     "alice-key-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{1, 2, 3},
+	})
+	if err != nil {
+		t.Fatalf("UpsertIdentityKey() error = %v", err)
+	}
+	if identityKey.KeyID != "alice-key-1" {
+		t.Fatalf("UpsertIdentityKey() = %+v", identityKey)
+	}
+
+	conversationKey, err := keyStore.UpsertConversationKey(ctx, ConversationKey{
+		ConversationID: "group-1",
+		Version:        1,
+		Algorithm:      "AES-GCM",
+		CreatedBy:      "alice",
+		Envelopes: []ConversationKeyEnvelope{
+			{
+				Username:       "alice",
+				EncryptedKey:   []byte{1, 1, 1},
+				Nonce:          []byte{2, 2, 2},
+				SenderKeyID:    "alice-key-1",
+				RecipientKeyID: "alice-key-1",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpsertConversationKey() error = %v", err)
+	}
+	if conversationKey.Version != 1 {
+		t.Fatalf("UpsertConversationKey() = %+v", conversationKey)
+	}
+
+	fetchedConversationKey, err := keyStore.GetConversationKey(ctx, "group-1", 1)
+	if err != nil {
+		t.Fatalf("GetConversationKey() error = %v", err)
+	}
+	if fetchedConversationKey.CreatedBy != "alice" || len(fetchedConversationKey.Envelopes) != 1 {
+		t.Fatalf("GetConversationKey() = %+v", fetchedConversationKey)
+	}
+
 	conversations, err := messageStore.Conversations(ctx, "alice")
 	if err != nil {
 		t.Fatalf("Conversations() error = %v", err)

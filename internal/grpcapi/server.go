@@ -30,15 +30,19 @@ type Server struct {
 	userStore store.UserStore
 	msgStore  store.MessageStore
 	convStore store.ConversationStore
+	keyStore  store.KeyStore
+	groupState store.GroupStateStore
 	hub       *eventHub
 }
 
-func NewServer(authSvc *auth.Service, userStore store.UserStore, msgStore store.MessageStore, convStore store.ConversationStore) *Server {
+func NewServer(authSvc *auth.Service, userStore store.UserStore, msgStore store.MessageStore, convStore store.ConversationStore, keyStore store.KeyStore) *Server {
 	return &Server{
 		authSvc:   authSvc,
 		userStore: userStore,
 		msgStore:  msgStore,
 		convStore: convStore,
+		keyStore:  keyStore,
+		groupState: store.NewGroupStateStore(convStore, keyStore),
 		hub:       newEventHub(),
 	}
 }
@@ -79,6 +83,9 @@ func (s *Server) DeleteAccount(ctx context.Context, _ *emptypb.Empty) (*emptypb.
 	}
 	if err := s.convStore.DeleteUser(ctx, username); err != nil {
 		return nil, status.Error(codes.Internal, "failed to delete conversations")
+	}
+	if err := s.keyStore.DeleteUser(ctx, username); err != nil {
+		return nil, status.Error(codes.Internal, "failed to delete keys")
 	}
 	if err := s.authSvc.DeleteAccount(ctx, username); err != nil {
 		return nil, status.Error(codes.Internal, "failed to delete user")
@@ -155,6 +162,129 @@ func (s *Server) SearchUsers(ctx context.Context, req *messengerv1.SearchUsersRe
 		items = append(items, profileFromUser(user))
 	}
 	return &messengerv1.SearchUsersResponse{Items: items}, nil
+}
+
+func (s *Server) PublishIdentityKey(ctx context.Context, req *messengerv1.PublishIdentityKeyRequest) (*messengerv1.IdentityKey, error) {
+	username, _, err := s.requireAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	key, err := s.keyStore.UpsertIdentityKey(ctx, store.IdentityKey{
+		Username:  username,
+		KeyID:     req.GetKeyId(),
+		Algorithm: req.GetAlgorithm(),
+		PublicKey: req.GetPublicKey(),
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad request")
+		}
+		return nil, status.Error(codes.Internal, "failed to publish identity key")
+	}
+	return identityKeyToProto(key), nil
+}
+
+func (s *Server) GetIdentityKey(ctx context.Context, req *messengerv1.GetIdentityKeyRequest) (*messengerv1.IdentityKey, error) {
+	if _, _, err := s.requireAuth(ctx); err != nil {
+		return nil, err
+	}
+
+	key, err := s.keyStore.GetIdentityKey(ctx, req.GetUsername())
+	if err != nil {
+		if errors.Is(err, store.ErrIdentityKeyNotFound) {
+			return nil, status.Error(codes.NotFound, "identity key not found")
+		}
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad request")
+		}
+		return nil, status.Error(codes.Internal, "failed to load identity key")
+	}
+	return identityKeyToProto(key), nil
+}
+
+func (s *Server) GetIdentityKeys(ctx context.Context, req *messengerv1.GetIdentityKeysRequest) (*messengerv1.GetIdentityKeysResponse, error) {
+	if _, _, err := s.requireAuth(ctx); err != nil {
+		return nil, err
+	}
+
+	items, err := s.keyStore.GetIdentityKeys(ctx, req.GetUsernames())
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to load identity keys")
+	}
+	out := make([]*messengerv1.IdentityKey, 0, len(items))
+	for _, item := range items {
+		out = append(out, identityKeyToProto(item))
+	}
+	return &messengerv1.GetIdentityKeysResponse{Items: out}, nil
+}
+
+func (s *Server) PublishPrekeyBundle(ctx context.Context, req *messengerv1.PublishPrekeyBundleRequest) (*messengerv1.PrekeyBundle, error) {
+	username, _, err := s.requireAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	identity, err := s.keyStore.GetIdentityKey(ctx, username)
+	if err != nil {
+		if errors.Is(err, store.ErrIdentityKeyNotFound) {
+			return nil, status.Error(codes.FailedPrecondition, "identity key must be published first")
+		}
+		return nil, status.Error(codes.Internal, "failed to load identity key")
+	}
+
+	signedPrekey, err := s.keyStore.UpsertSignedPrekey(ctx, store.SignedPrekey{
+		Username:  username,
+		KeyID:     req.GetSignedPrekeyId(),
+		Algorithm: req.GetSignedPrekeyAlgorithm(),
+		PublicKey: req.GetSignedPrekeyPublicKey(),
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad request")
+		}
+		return nil, status.Error(codes.Internal, "failed to publish signed prekey")
+	}
+
+	oneTimePrekeys := make([]store.OneTimePrekey, 0, len(req.GetOneTimePrekeys()))
+	for _, item := range req.GetOneTimePrekeys() {
+		oneTimePrekeys = append(oneTimePrekeys, store.OneTimePrekey{
+			Username:  username,
+			KeyID:     item.GetKeyId(),
+			Algorithm: item.GetAlgorithm(),
+			PublicKey: item.GetPublicKey(),
+		})
+	}
+	if err := s.keyStore.PutOneTimePrekeys(ctx, username, oneTimePrekeys); err != nil {
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad request")
+		}
+		return nil, status.Error(codes.Internal, "failed to publish one-time prekeys")
+	}
+
+	return prekeyBundleToProto(store.PrekeyBundle{
+		Username:     username,
+		IdentityKey:  identity,
+		SignedPrekey: signedPrekey,
+	}), nil
+}
+
+func (s *Server) AcquirePrekeyBundle(ctx context.Context, req *messengerv1.AcquirePrekeyBundleRequest) (*messengerv1.PrekeyBundle, error) {
+	if _, _, err := s.requireAuth(ctx); err != nil {
+		return nil, err
+	}
+
+	bundle, err := s.keyStore.AcquirePrekeyBundle(ctx, req.GetUsername())
+	if err != nil {
+		if errors.Is(err, store.ErrIdentityKeyNotFound) || errors.Is(err, store.ErrSignedPrekeyNotFound) {
+			return nil, status.Error(codes.NotFound, "prekey bundle not found")
+		}
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad request")
+		}
+		return nil, status.Error(codes.Internal, "failed to acquire prekey bundle")
+	}
+	return prekeyBundleToProto(bundle), nil
 }
 
 func (s *Server) ListConversations(ctx context.Context, _ *emptypb.Empty) (*messengerv1.ListConversationsResponse, error) {
@@ -251,12 +381,19 @@ func (s *Server) CreateGroupConversation(ctx context.Context, req *messengerv1.C
 		return nil, status.Error(codes.InvalidArgument, "title and at least one member are required")
 	}
 
-	conversation, err := s.convStore.CreateGroupConversation(ctx, store.Conversation{
+	baseConversation := store.Conversation{
 		ID:      newGroupConversationID(),
 		Kind:    store.ConversationKindGroup,
 		Title:   req.GetTitle(),
 		Members: members,
-	})
+	}
+	var conversation store.Conversation
+	if req.GetInitialKey() != nil && s.groupState != nil {
+		key := groupKeyUpdateFromProto(req.GetInitialKey(), baseConversation.ID, username)
+		conversation, _, err = s.groupState.CreateConversationWithKey(ctx, baseConversation, key)
+	} else {
+		conversation, err = s.convStore.CreateGroupConversation(ctx, baseConversation)
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrBadInput) {
 			return nil, status.Error(codes.InvalidArgument, "bad request")
@@ -299,7 +436,13 @@ func (s *Server) AddGroupMembers(ctx context.Context, req *messengerv1.AddGroupM
 		members = append(members, member)
 	}
 
-	updated, err := s.convStore.AddMembers(ctx, req.GetConversationId(), username, members)
+	var updated store.Conversation
+	if req.GetNextKey() != nil && s.groupState != nil {
+		key := groupKeyUpdateFromProto(req.GetNextKey(), req.GetConversationId(), username)
+		updated, _, err = s.groupState.AddMembersWithKey(ctx, req.GetConversationId(), username, members, key)
+	} else {
+		updated, err = s.convStore.AddMembers(ctx, req.GetConversationId(), username, members)
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrBadInput) {
 			return nil, status.Error(codes.InvalidArgument, "bad request")
@@ -330,7 +473,13 @@ func (s *Server) RemoveGroupMember(ctx context.Context, req *messengerv1.RemoveG
 		return nil, status.Error(codes.PermissionDenied, "not a conversation member")
 	}
 
-	updated, err := s.convStore.RemoveMember(ctx, req.GetConversationId(), username, req.GetUsername())
+	var updated store.Conversation
+	if req.GetNextKey() != nil && s.groupState != nil {
+		key := groupKeyUpdateFromProto(req.GetNextKey(), req.GetConversationId(), username)
+		updated, _, err = s.groupState.RemoveMemberWithKey(ctx, req.GetConversationId(), username, req.GetUsername(), key)
+	} else {
+		updated, err = s.convStore.RemoveMember(ctx, req.GetConversationId(), username, req.GetUsername())
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrBadInput) {
 			return nil, status.Error(codes.InvalidArgument, "bad request")
@@ -364,7 +513,13 @@ func (s *Server) LeaveGroupConversation(ctx context.Context, req *messengerv1.Le
 		return nil, status.Error(codes.PermissionDenied, "not a conversation member")
 	}
 
-	updated, err := s.convStore.LeaveConversation(ctx, req.GetConversationId(), username)
+	var updated store.Conversation
+	if req.GetNextKey() != nil && s.groupState != nil {
+		key := groupKeyUpdatePtrFromProto(req.GetNextKey(), req.GetConversationId(), username)
+		updated, _, err = s.groupState.LeaveConversationWithKey(ctx, req.GetConversationId(), username, key)
+	} else {
+		updated, err = s.convStore.LeaveConversation(ctx, req.GetConversationId(), username)
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrBadInput) {
 			return nil, status.Error(codes.InvalidArgument, "bad request")
@@ -414,13 +569,90 @@ func (s *Server) TransferGroupAdmin(ctx context.Context, req *messengerv1.Transf
 	return conversationToProto(updated), nil
 }
 
+func (s *Server) UpsertConversationKey(ctx context.Context, req *messengerv1.UpsertConversationKeyRequest) (*messengerv1.ConversationKey, error) {
+	username, _, err := s.requireAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	conversation, err := s.convStore.GetConversation(ctx, req.GetConversationId())
+	if err != nil {
+		if errors.Is(err, store.ErrConversationNotFound) {
+			return nil, status.Error(codes.NotFound, "conversation not found")
+		}
+		return nil, status.Error(codes.Internal, "failed to load conversation")
+	}
+	if !conversation.HasMember(username) {
+		return nil, status.Error(codes.PermissionDenied, "not a conversation member")
+	}
+
+	envelopes := make([]store.ConversationKeyEnvelope, 0, len(req.GetEnvelopes()))
+	for _, envelope := range req.GetEnvelopes() {
+		envelopes = append(envelopes, store.ConversationKeyEnvelope{
+			Username:       envelope.GetUsername(),
+			EncryptedKey:   envelope.GetEncryptedKey(),
+			Nonce:          envelope.GetNonce(),
+			SenderKeyID:    envelope.GetSenderKeyId(),
+			RecipientKeyID: envelope.GetRecipientKeyId(),
+		})
+	}
+
+	key, err := s.keyStore.UpsertConversationKey(ctx, store.ConversationKey{
+		ConversationID: req.GetConversationId(),
+		Version:        req.GetVersion(),
+		Algorithm:      req.GetAlgorithm(),
+		CreatedBy:      username,
+		Envelopes:      envelopes,
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad request")
+		}
+		return nil, status.Error(codes.Internal, "failed to upsert conversation key")
+	}
+	return conversationKeyToProto(key), nil
+}
+
+func (s *Server) GetConversationKey(ctx context.Context, req *messengerv1.GetConversationKeyRequest) (*messengerv1.ConversationKey, error) {
+	username, _, err := s.requireAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	conversation, err := s.convStore.GetConversation(ctx, req.GetConversationId())
+	if err != nil {
+		if errors.Is(err, store.ErrConversationNotFound) {
+			return nil, status.Error(codes.NotFound, "conversation not found")
+		}
+		return nil, status.Error(codes.Internal, "failed to load conversation")
+	}
+	if !conversation.HasMember(username) {
+		return nil, status.Error(codes.PermissionDenied, "not a conversation member")
+	}
+
+	key, err := s.keyStore.GetConversationKey(ctx, req.GetConversationId(), req.GetVersion())
+	if err != nil {
+		if errors.Is(err, store.ErrConversationKeyNotFound) {
+			return nil, status.Error(codes.NotFound, "conversation key not found")
+		}
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad request")
+		}
+		return nil, status.Error(codes.Internal, "failed to load conversation key")
+	}
+	return conversationKeyToProto(key), nil
+}
+
 func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRequest) (*messengerv1.Message, error) {
 	username, _, err := s.requireAuth(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if req.GetText() == "" {
+	if !req.GetEncrypted() && req.GetText() == "" {
 		return nil, status.Error(codes.InvalidArgument, "text is required")
+	}
+	if req.GetEncrypted() && (len(req.GetCiphertext()) == 0 || len(req.GetNonce()) == 0 || req.GetSenderKeyId() == "") {
+		return nil, status.Error(codes.InvalidArgument, "ciphertext, nonce and sender_key_id are required")
 	}
 
 	now := time.Now().UTC()
@@ -454,6 +686,15 @@ func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRe
 		From:           username,
 		To:             recipient,
 		Text:           req.GetText(),
+		Ciphertext:     req.GetCiphertext(),
+		Nonce:          req.GetNonce(),
+		SenderKeyID:    req.GetSenderKeyId(),
+		KeyVersion:     req.GetConversationKeyVersion(),
+		Encrypted:      req.GetEncrypted(),
+		RecipientSignedPrekeyID: req.GetRecipientSignedPrekeyId(),
+		RecipientSignedPrekeyPublic: req.GetRecipientSignedPrekeyPublic(),
+		RecipientOneTimePrekeyID: req.GetRecipientOneTimePrekeyId(),
+		RecipientOneTimePrekeyPublic: req.GetRecipientOneTimePrekeyPublic(),
 		TS:             now,
 	})
 	if err != nil {
@@ -685,13 +926,116 @@ func conversationMemberToProto(member store.ConversationMember) *messengerv1.Con
 
 func messageFromStore(msg store.Message) *messengerv1.Message {
 	return &messengerv1.Message{
-		MessageId:      msg.ID,
-		ConversationId: msg.ConversationID,
-		From:           msg.From,
-		To:             msg.To,
-		Text:           msg.Text,
-		CreatedAt:      timestamppb.New(msg.TS),
+		MessageId:              msg.ID,
+		ConversationId:         msg.ConversationID,
+		From:                   msg.From,
+		To:                     msg.To,
+		Text:                   msg.Text,
+		CreatedAt:              timestamppb.New(msg.TS),
+		Ciphertext:             msg.Ciphertext,
+		Nonce:                  msg.Nonce,
+		SenderKeyId:            msg.SenderKeyID,
+		ConversationKeyVersion: msg.KeyVersion,
+		Encrypted:              msg.Encrypted,
+		RecipientSignedPrekeyId: msg.RecipientSignedPrekeyID,
+		RecipientSignedPrekeyPublic: msg.RecipientSignedPrekeyPublic,
+		RecipientOneTimePrekeyId: msg.RecipientOneTimePrekeyID,
+		RecipientOneTimePrekeyPublic: msg.RecipientOneTimePrekeyPublic,
 	}
+}
+
+func identityKeyToProto(key store.IdentityKey) *messengerv1.IdentityKey {
+	return &messengerv1.IdentityKey{
+		Username:    key.Username,
+		KeyId:       key.KeyID,
+		Algorithm:   key.Algorithm,
+		PublicKey:   key.PublicKey,
+		PublishedAt: timestamppb.New(key.PublishedAt),
+	}
+}
+
+func conversationKeyToProto(key store.ConversationKey) *messengerv1.ConversationKey {
+	envelopes := make([]*messengerv1.ConversationKeyEnvelope, 0, len(key.Envelopes))
+	for _, envelope := range key.Envelopes {
+		envelopes = append(envelopes, &messengerv1.ConversationKeyEnvelope{
+			Username:       envelope.Username,
+			EncryptedKey:   envelope.EncryptedKey,
+			Nonce:          envelope.Nonce,
+			SenderKeyId:    envelope.SenderKeyID,
+			RecipientKeyId: envelope.RecipientKeyID,
+		})
+	}
+	return &messengerv1.ConversationKey{
+		ConversationId: key.ConversationID,
+		Version:        key.Version,
+		Algorithm:      key.Algorithm,
+		CreatedBy:      key.CreatedBy,
+		Envelopes:      envelopes,
+		CreatedAt:      timestamppb.New(key.CreatedAt),
+	}
+}
+
+func prekeyBundleToProto(bundle store.PrekeyBundle) *messengerv1.PrekeyBundle {
+	return &messengerv1.PrekeyBundle{
+		Username: bundle.Username,
+		IdentityKey: identityKeyToProto(bundle.IdentityKey),
+		SignedPrekey: signedPrekeyToProto(bundle.SignedPrekey),
+		OneTimePrekey: oneTimePrekeyToProto(bundle.OneTimePrekey),
+	}
+}
+
+func signedPrekeyToProto(key store.SignedPrekey) *messengerv1.SignedPrekey {
+	if key.Username == "" {
+		return nil
+	}
+	return &messengerv1.SignedPrekey{
+		Username: key.Username,
+		KeyId: key.KeyID,
+		Algorithm: key.Algorithm,
+		PublicKey: key.PublicKey,
+		PublishedAt: timestamppb.New(key.PublishedAt),
+	}
+}
+
+func oneTimePrekeyToProto(key store.OneTimePrekey) *messengerv1.OneTimePrekey {
+	if key.Username == "" {
+		return nil
+	}
+	return &messengerv1.OneTimePrekey{
+		Username: key.Username,
+		KeyId: key.KeyID,
+		Algorithm: key.Algorithm,
+		PublicKey: key.PublicKey,
+		PublishedAt: timestamppb.New(key.PublishedAt),
+	}
+}
+
+func groupKeyUpdateFromProto(req *messengerv1.GroupKeyUpdate, conversationID, createdBy string) store.ConversationKey {
+	envelopes := make([]store.ConversationKeyEnvelope, 0, len(req.GetEnvelopes()))
+	for _, envelope := range req.GetEnvelopes() {
+		envelopes = append(envelopes, store.ConversationKeyEnvelope{
+			Username: envelope.GetUsername(),
+			EncryptedKey: envelope.GetEncryptedKey(),
+			Nonce: envelope.GetNonce(),
+			SenderKeyID: envelope.GetSenderKeyId(),
+			RecipientKeyID: envelope.GetRecipientKeyId(),
+		})
+	}
+	return store.ConversationKey{
+		ConversationID: conversationID,
+		Version: req.GetVersion(),
+		Algorithm: req.GetAlgorithm(),
+		CreatedBy: createdBy,
+		Envelopes: envelopes,
+	}
+}
+
+func groupKeyUpdatePtrFromProto(req *messengerv1.GroupKeyUpdate, conversationID, createdBy string) *store.ConversationKey {
+	if req == nil {
+		return nil
+	}
+	key := groupKeyUpdateFromProto(req, conversationID, createdBy)
+	return &key
 }
 
 func newMessageEvent(msg *messengerv1.Message) *messengerv1.ServerEvent {

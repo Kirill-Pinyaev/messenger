@@ -18,11 +18,18 @@ service UserService {
   rpc UpdateProfile(UpdateProfileRequest) returns (Profile);
   rpc SearchUsers(SearchUsersRequest) returns (SearchUsersResponse);
   rpc ListConversations(google.protobuf.Empty) returns (ListConversationsResponse);
+  rpc PublishIdentityKey(PublishIdentityKeyRequest) returns (IdentityKey);
+  rpc PublishPrekeyBundle(PublishPrekeyBundleRequest) returns (PrekeyBundle);
+  rpc GetIdentityKey(GetIdentityKeyRequest) returns (IdentityKey);
+  rpc GetIdentityKeys(GetIdentityKeysRequest) returns (GetIdentityKeysResponse);
+  rpc AcquirePrekeyBundle(AcquirePrekeyBundleRequest) returns (PrekeyBundle);
   rpc CreateGroupConversation(CreateGroupConversationRequest) returns (Conversation);
   rpc AddGroupMembers(AddGroupMembersRequest) returns (Conversation);
   rpc RemoveGroupMember(RemoveGroupMemberRequest) returns (Conversation);
   rpc LeaveGroupConversation(LeaveGroupConversationRequest) returns (google.protobuf.Empty);
   rpc TransferGroupAdmin(TransferGroupAdminRequest) returns (Conversation);
+  rpc UpsertConversationKey(UpsertConversationKeyRequest) returns (ConversationKey);
+  rpc GetConversationKey(GetConversationKeyRequest) returns (ConversationKey);
 }
 
 service MessageService {
@@ -79,6 +86,72 @@ message SearchUsersResponse {
   repeated Profile items = 1;
 }
 
+message IdentityKey {
+  string username = 1;
+  string key_id = 2;
+  string algorithm = 3;
+  bytes public_key = 4;
+  google.protobuf.Timestamp published_at = 5;
+}
+
+message PublishIdentityKeyRequest {
+  string key_id = 1;
+  string algorithm = 2;
+  bytes public_key = 3;
+}
+
+message SignedPrekey {
+  string username = 1;
+  string key_id = 2;
+  string algorithm = 3;
+  bytes public_key = 4;
+  google.protobuf.Timestamp published_at = 5;
+}
+
+message OneTimePrekey {
+  string username = 1;
+  string key_id = 2;
+  string algorithm = 3;
+  bytes public_key = 4;
+  google.protobuf.Timestamp published_at = 5;
+}
+
+message PrekeyBundle {
+  string username = 1;
+  IdentityKey identity_key = 2;
+  SignedPrekey signed_prekey = 3;
+  OneTimePrekey one_time_prekey = 4;
+}
+
+message OneTimePrekeyUpload {
+  string key_id = 1;
+  string algorithm = 2;
+  bytes public_key = 3;
+}
+
+message PublishPrekeyBundleRequest {
+  string signed_prekey_id = 1;
+  string signed_prekey_algorithm = 2;
+  bytes signed_prekey_public_key = 3;
+  repeated OneTimePrekeyUpload one_time_prekeys = 4;
+}
+
+message AcquirePrekeyBundleRequest {
+  string username = 1;
+}
+
+message GetIdentityKeyRequest {
+  string username = 1;
+}
+
+message GetIdentityKeysRequest {
+  repeated string usernames = 1;
+}
+
+message GetIdentityKeysResponse {
+  repeated IdentityKey items = 1;
+}
+
 message Conversation {
   string conversation_id = 1;
   string peer_username = 2;
@@ -102,20 +175,24 @@ enum ConversationKind {
 message CreateGroupConversationRequest {
   string title = 1;
   repeated string member_usernames = 2;
+  GroupKeyUpdate initial_key = 3;
 }
 
 message AddGroupMembersRequest {
   string conversation_id = 1;
   repeated string member_usernames = 2;
+  GroupKeyUpdate next_key = 3;
 }
 
 message RemoveGroupMemberRequest {
   string conversation_id = 1;
   string username = 2;
+  GroupKeyUpdate next_key = 3;
 }
 
 message LeaveGroupConversationRequest {
   string conversation_id = 1;
+  GroupKeyUpdate next_key = 2;
 }
 
 message TransferGroupAdminRequest {
@@ -135,6 +212,41 @@ message ConversationMember {
   string added_by = 3;
 }
 
+message ConversationKeyEnvelope {
+  string username = 1;
+  bytes encrypted_key = 2;
+  bytes nonce = 3;
+  string sender_key_id = 4;
+  string recipient_key_id = 5;
+}
+
+message ConversationKey {
+  string conversation_id = 1;
+  int32 version = 2;
+  string algorithm = 3;
+  string created_by = 4;
+  repeated ConversationKeyEnvelope envelopes = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message GroupKeyUpdate {
+  int32 version = 1;
+  string algorithm = 2;
+  repeated ConversationKeyEnvelope envelopes = 3;
+}
+
+message UpsertConversationKeyRequest {
+  string conversation_id = 1;
+  int32 version = 2;
+  string algorithm = 3;
+  repeated ConversationKeyEnvelope envelopes = 4;
+}
+
+message GetConversationKeyRequest {
+  string conversation_id = 1;
+  int32 version = 2;
+}
+
 message Message {
   int64 message_id = 1;
   string conversation_id = 2;
@@ -142,12 +254,30 @@ message Message {
   string to = 4;
   string text = 5;
   google.protobuf.Timestamp created_at = 6;
+  bytes ciphertext = 7;
+  bytes nonce = 8;
+  string sender_key_id = 9;
+  int32 conversation_key_version = 10;
+  bool encrypted = 11;
+  string recipient_signed_prekey_id = 12;
+  bytes recipient_signed_prekey_public = 13;
+  string recipient_one_time_prekey_id = 14;
+  bytes recipient_one_time_prekey_public = 15;
 }
 
 message SendMessageRequest {
   string to = 1;
   string text = 2;
   string conversation_id = 3;
+  bytes ciphertext = 4;
+  bytes nonce = 5;
+  string sender_key_id = 6;
+  int32 conversation_key_version = 7;
+  bool encrypted = 8;
+  string recipient_signed_prekey_id = 9;
+  bytes recipient_signed_prekey_public = 10;
+  string recipient_one_time_prekey_id = 11;
+  bytes recipient_one_time_prekey_public = 12;
 }
 
 message GetMessagesRequest {

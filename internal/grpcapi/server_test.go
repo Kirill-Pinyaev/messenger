@@ -155,6 +155,7 @@ func TestServerMessageFlowAndStreaming(t *testing.T) {
 
 	aliceCtx := registerAndLogin("alice")
 	bobCtx := registerAndLogin("bob")
+	_ = registerAndLogin("carol")
 
 	bobStream, err := messageClient.StreamEvents(bobCtx, &messengerv1.StreamEventsRequest{})
 	if err != nil {
@@ -543,14 +544,240 @@ func TestServerGroupConversationFlow(t *testing.T) {
 	}
 }
 
+func TestServerEncryptedMessageAndKeyFlow(t *testing.T) {
+	t.Parallel()
+
+	authClient, userClient, messageClient, cleanup := newTestClients(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	registerAndLogin := func(username string) context.Context {
+		t.Helper()
+
+		if _, err := authClient.Register(ctx, &messengerv1.RegisterRequest{
+			Username: username,
+			Password: "secret",
+		}); err != nil {
+			t.Fatalf("Register(%s) error = %v", username, err)
+		}
+		loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
+			Username: username,
+			Password: "secret",
+		})
+		if err != nil {
+			t.Fatalf("Login(%s) error = %v", username, err)
+		}
+		return authContext(ctx, loginResp.GetToken())
+	}
+
+	aliceCtx := registerAndLogin("alice")
+	bobCtx := registerAndLogin("bob")
+	_ = registerAndLogin("carol")
+
+	aliceKey, err := userClient.PublishIdentityKey(aliceCtx, &messengerv1.PublishIdentityKeyRequest{
+		KeyId:     "alice-key-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{1, 2, 3},
+	})
+	if err != nil {
+		t.Fatalf("PublishIdentityKey(alice) error = %v", err)
+	}
+	if aliceKey.GetUsername() != "alice" || aliceKey.GetKeyId() != "alice-key-1" {
+		t.Fatalf("PublishIdentityKey(alice) = %+v", aliceKey)
+	}
+
+	if _, err := userClient.PublishIdentityKey(bobCtx, &messengerv1.PublishIdentityKeyRequest{
+		KeyId:     "bob-key-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{4, 5, 6},
+	}); err != nil {
+		t.Fatalf("PublishIdentityKey(bob) error = %v", err)
+	}
+
+	if _, err := userClient.PublishPrekeyBundle(bobCtx, &messengerv1.PublishPrekeyBundleRequest{
+		SignedPrekeyId:        "bob-signed-1",
+		SignedPrekeyAlgorithm: "P256-HKDF-AESGCM",
+		SignedPrekeyPublicKey: []byte{6, 5, 4},
+		OneTimePrekeys: []*messengerv1.OneTimePrekeyUpload{
+			{KeyId: "bob-otp-1", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{9, 9, 1}},
+			{KeyId: "bob-otp-2", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{9, 9, 2}},
+		},
+	}); err != nil {
+		t.Fatalf("PublishPrekeyBundle(bob) error = %v", err)
+	}
+
+	acquiredFirst, err := userClient.AcquirePrekeyBundle(aliceCtx, &messengerv1.AcquirePrekeyBundleRequest{
+		Username: "bob",
+	})
+	if err != nil {
+		t.Fatalf("AcquirePrekeyBundle(first) error = %v", err)
+	}
+	if acquiredFirst.GetSignedPrekey().GetKeyId() != "bob-signed-1" || acquiredFirst.GetOneTimePrekey().GetKeyId() != "bob-otp-1" {
+		t.Fatalf("AcquirePrekeyBundle(first) = %+v", acquiredFirst)
+	}
+
+	acquiredSecond, err := userClient.AcquirePrekeyBundle(aliceCtx, &messengerv1.AcquirePrekeyBundleRequest{
+		Username: "bob",
+	})
+	if err != nil {
+		t.Fatalf("AcquirePrekeyBundle(second) error = %v", err)
+	}
+	if acquiredSecond.GetOneTimePrekey().GetKeyId() != "bob-otp-2" {
+		t.Fatalf("AcquirePrekeyBundle(second) = %+v", acquiredSecond)
+	}
+
+	keys, err := userClient.GetIdentityKeys(aliceCtx, &messengerv1.GetIdentityKeysRequest{
+		Usernames: []string{"alice", "bob"},
+	})
+	if err != nil {
+		t.Fatalf("GetIdentityKeys() error = %v", err)
+	}
+	if len(keys.GetItems()) != 2 {
+		t.Fatalf("GetIdentityKeys() = %+v", keys.GetItems())
+	}
+
+	bobStream, err := messageClient.StreamEvents(bobCtx, &messengerv1.StreamEventsRequest{})
+	if err != nil {
+		t.Fatalf("StreamEvents(bob) error = %v", err)
+	}
+	if _, err := waitForEvent(t, bobStream, func(event *messengerv1.ServerEvent) bool {
+		return event.GetPresence() != nil
+	}); err != nil {
+		t.Fatalf("waiting for bob presence event: %v", err)
+	}
+
+	sent, err := messageClient.SendMessage(aliceCtx, &messengerv1.SendMessageRequest{
+		To:                       "bob",
+		Ciphertext:               []byte{10, 11, 12},
+		Nonce:                    []byte{1, 1, 1, 1},
+		SenderKeyId:              "alice-key-1",
+		ConversationKeyVersion: 1,
+		Encrypted:                true,
+		RecipientSignedPrekeyId:  acquiredFirst.GetSignedPrekey().GetKeyId(),
+		RecipientSignedPrekeyPublic: acquiredFirst.GetSignedPrekey().GetPublicKey(),
+		RecipientOneTimePrekeyId: acquiredFirst.GetOneTimePrekey().GetKeyId(),
+		RecipientOneTimePrekeyPublic: acquiredFirst.GetOneTimePrekey().GetPublicKey(),
+	})
+	if err != nil {
+		t.Fatalf("SendMessage(encrypted) error = %v", err)
+	}
+	if !sent.GetEncrypted() || len(sent.GetCiphertext()) != 3 || sent.GetText() != "" || sent.GetRecipientSignedPrekeyId() != "bob-signed-1" {
+		t.Fatalf("SendMessage(encrypted) = %+v", sent)
+	}
+
+	event, err := waitForEvent(t, bobStream, func(event *messengerv1.ServerEvent) bool {
+		msg := event.GetMessage()
+		return msg != nil && msg.GetMessageId() == sent.GetMessageId()
+	})
+	if err != nil {
+		t.Fatalf("waiting for encrypted message event: %v", err)
+	}
+	if !event.GetMessage().GetEncrypted() || event.GetMessage().GetSenderKeyId() != "alice-key-1" {
+		t.Fatalf("encrypted event = %+v", event.GetMessage())
+	}
+
+	history, err := messageClient.GetMessages(bobCtx, &messengerv1.GetMessagesRequest{
+		WithUsername: "alice",
+		Limit:        10,
+	})
+	if err != nil {
+		t.Fatalf("GetMessages(encrypted) error = %v", err)
+	}
+	if len(history.GetItems()) != 1 || history.GetItems()[0].GetText() != "" || !history.GetItems()[0].GetEncrypted() {
+		t.Fatalf("GetMessages(encrypted) = %+v", history.GetItems())
+	}
+
+	group, err := userClient.CreateGroupConversation(aliceCtx, &messengerv1.CreateGroupConversationRequest{
+		Title:           "Encrypted group",
+		MemberUsernames: []string{"bob"},
+		InitialKey: &messengerv1.GroupKeyUpdate{
+			Version:   1,
+			Algorithm: "AES-GCM",
+			Envelopes: []*messengerv1.ConversationKeyEnvelope{
+				{
+					Username:       "alice",
+					EncryptedKey:   []byte{1, 2, 3},
+					Nonce:          []byte{4, 5, 6},
+					SenderKeyId:    "alice-key-1",
+					RecipientKeyId: "alice-key-1",
+				},
+				{
+					Username:       "bob",
+					EncryptedKey:   []byte{7, 8, 9},
+					Nonce:          []byte{3, 2, 1},
+					SenderKeyId:    "alice-key-1",
+					RecipientKeyId: "bob-key-1",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateGroupConversation() error = %v", err)
+	}
+
+	conversationKey, err := userClient.GetConversationKey(aliceCtx, &messengerv1.GetConversationKeyRequest{
+		ConversationId: group.GetConversationId(),
+		Version:        1,
+	})
+	if err != nil {
+		t.Fatalf("GetConversationKey(create initial) error = %v", err)
+	}
+	if conversationKey.GetVersion() != 1 || len(conversationKey.GetEnvelopes()) != 2 {
+		t.Fatalf("CreateGroupConversation(initial key) = %+v", conversationKey)
+	}
+
+	fetchedKey, err := userClient.GetConversationKey(bobCtx, &messengerv1.GetConversationKeyRequest{
+		ConversationId: group.GetConversationId(),
+		Version:        1,
+	})
+	if err != nil {
+		t.Fatalf("GetConversationKey() error = %v", err)
+	}
+	if fetchedKey.GetConversationId() != group.GetConversationId() || fetchedKey.GetEnvelopes()[1].GetRecipientKeyId() != "bob-key-1" {
+		t.Fatalf("GetConversationKey() = %+v", fetchedKey)
+	}
+
+	updatedGroup, err := userClient.AddGroupMembers(aliceCtx, &messengerv1.AddGroupMembersRequest{
+		ConversationId:  group.GetConversationId(),
+		MemberUsernames: []string{"carol"},
+		NextKey: &messengerv1.GroupKeyUpdate{
+			Version:   2,
+			Algorithm: "AES-GCM",
+			Envelopes: []*messengerv1.ConversationKeyEnvelope{
+				{Username: "alice", EncryptedKey: []byte{1}, Nonce: []byte{1}, SenderKeyId: "alice-key-1", RecipientKeyId: "alice-key-1"},
+				{Username: "bob", EncryptedKey: []byte{2}, Nonce: []byte{2}, SenderKeyId: "alice-key-1", RecipientKeyId: "bob-key-1"},
+				{Username: "carol", EncryptedKey: []byte{3}, Nonce: []byte{3}, SenderKeyId: "alice-key-1", RecipientKeyId: "carol-key-1"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AddGroupMembers(next key) error = %v", err)
+	}
+	if len(updatedGroup.GetMemberUsernames()) != 3 {
+		t.Fatalf("AddGroupMembers(next key) = %+v", updatedGroup)
+	}
+
+	latestKey, err := userClient.GetConversationKey(aliceCtx, &messengerv1.GetConversationKeyRequest{
+		ConversationId: group.GetConversationId(),
+		Version:        0,
+	})
+	if err != nil {
+		t.Fatalf("GetConversationKey(latest after add) error = %v", err)
+	}
+	if latestKey.GetVersion() != 2 || len(latestKey.GetEnvelopes()) != 3 {
+		t.Fatalf("GetConversationKey(latest after add) = %+v", latestKey)
+	}
+}
+
 func newTestClients(t *testing.T) (messengerv1.AuthServiceClient, messengerv1.UserServiceClient, messengerv1.MessageServiceClient, func()) {
 	t.Helper()
 
 	userStore := store.NewMemoryUserStore()
 	msgStore := store.NewMemoryMessageStore()
 	convStore := store.NewMemoryConversationStore()
+	keyStore := store.NewMemoryKeyStore()
 	authSvc := auth.NewService(userStore)
-	apiServer := NewServer(authSvc, userStore, msgStore, convStore)
+	apiServer := NewServer(authSvc, userStore, msgStore, convStore, keyStore)
 
 	listener := bufconn.Listen(bufSize)
 	server := grpc.NewServer()

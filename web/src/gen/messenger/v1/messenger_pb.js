@@ -124,6 +124,138 @@ export const SearchUsersResponse = /*@__PURE__*/ proto3.makeMessageType(
 );
 
 /**
+ * @generated from message messenger.v1.IdentityKey
+ */
+export const IdentityKey = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.IdentityKey",
+  () => [
+    { no: 1, name: "username", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "key_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 3, name: "algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 4, name: "public_key", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 5, name: "published_at", kind: "message", T: Timestamp },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.PublishIdentityKeyRequest
+ */
+export const PublishIdentityKeyRequest = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.PublishIdentityKeyRequest",
+  () => [
+    { no: 1, name: "key_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 3, name: "public_key", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.SignedPrekey
+ */
+export const SignedPrekey = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.SignedPrekey",
+  () => [
+    { no: 1, name: "username", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "key_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 3, name: "algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 4, name: "public_key", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 5, name: "published_at", kind: "message", T: Timestamp },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.OneTimePrekey
+ */
+export const OneTimePrekey = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.OneTimePrekey",
+  () => [
+    { no: 1, name: "username", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "key_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 3, name: "algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 4, name: "public_key", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 5, name: "published_at", kind: "message", T: Timestamp },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.PrekeyBundle
+ */
+export const PrekeyBundle = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.PrekeyBundle",
+  () => [
+    { no: 1, name: "username", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "identity_key", kind: "message", T: IdentityKey },
+    { no: 3, name: "signed_prekey", kind: "message", T: SignedPrekey },
+    { no: 4, name: "one_time_prekey", kind: "message", T: OneTimePrekey },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.OneTimePrekeyUpload
+ */
+export const OneTimePrekeyUpload = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.OneTimePrekeyUpload",
+  () => [
+    { no: 1, name: "key_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 3, name: "public_key", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.PublishPrekeyBundleRequest
+ */
+export const PublishPrekeyBundleRequest = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.PublishPrekeyBundleRequest",
+  () => [
+    { no: 1, name: "signed_prekey_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "signed_prekey_algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 3, name: "signed_prekey_public_key", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 4, name: "one_time_prekeys", kind: "message", T: OneTimePrekeyUpload, repeated: true },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.AcquirePrekeyBundleRequest
+ */
+export const AcquirePrekeyBundleRequest = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.AcquirePrekeyBundleRequest",
+  () => [
+    { no: 1, name: "username", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.GetIdentityKeyRequest
+ */
+export const GetIdentityKeyRequest = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.GetIdentityKeyRequest",
+  () => [
+    { no: 1, name: "username", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.GetIdentityKeysRequest
+ */
+export const GetIdentityKeysRequest = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.GetIdentityKeysRequest",
+  () => [
+    { no: 1, name: "usernames", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.GetIdentityKeysResponse
+ */
+export const GetIdentityKeysResponse = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.GetIdentityKeysResponse",
+  () => [
+    { no: 1, name: "items", kind: "message", T: IdentityKey, repeated: true },
+  ],
+);
+
+/**
  * @generated from message messenger.v1.Conversation
  */
 export const Conversation = /*@__PURE__*/ proto3.makeMessageType(
@@ -157,6 +289,7 @@ export const CreateGroupConversationRequest = /*@__PURE__*/ proto3.makeMessageTy
   () => [
     { no: 1, name: "title", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 2, name: "member_usernames", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
+    { no: 3, name: "initial_key", kind: "message", T: GroupKeyUpdate },
   ],
 );
 
@@ -168,6 +301,7 @@ export const AddGroupMembersRequest = /*@__PURE__*/ proto3.makeMessageType(
   () => [
     { no: 1, name: "conversation_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 2, name: "member_usernames", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
+    { no: 3, name: "next_key", kind: "message", T: GroupKeyUpdate },
   ],
 );
 
@@ -179,6 +313,7 @@ export const RemoveGroupMemberRequest = /*@__PURE__*/ proto3.makeMessageType(
   () => [
     { no: 1, name: "conversation_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 2, name: "username", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 3, name: "next_key", kind: "message", T: GroupKeyUpdate },
   ],
 );
 
@@ -189,6 +324,7 @@ export const LeaveGroupConversationRequest = /*@__PURE__*/ proto3.makeMessageTyp
   "messenger.v1.LeaveGroupConversationRequest",
   () => [
     { no: 1, name: "conversation_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "next_key", kind: "message", T: GroupKeyUpdate },
   ],
 );
 
@@ -216,6 +352,71 @@ export const ConversationMember = /*@__PURE__*/ proto3.makeMessageType(
 );
 
 /**
+ * @generated from message messenger.v1.ConversationKeyEnvelope
+ */
+export const ConversationKeyEnvelope = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.ConversationKeyEnvelope",
+  () => [
+    { no: 1, name: "username", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "encrypted_key", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 3, name: "nonce", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 4, name: "sender_key_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 5, name: "recipient_key_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.ConversationKey
+ */
+export const ConversationKey = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.ConversationKey",
+  () => [
+    { no: 1, name: "conversation_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "version", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+    { no: 3, name: "algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 4, name: "created_by", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 5, name: "envelopes", kind: "message", T: ConversationKeyEnvelope, repeated: true },
+    { no: 6, name: "created_at", kind: "message", T: Timestamp },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.GroupKeyUpdate
+ */
+export const GroupKeyUpdate = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.GroupKeyUpdate",
+  () => [
+    { no: 1, name: "version", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+    { no: 2, name: "algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 3, name: "envelopes", kind: "message", T: ConversationKeyEnvelope, repeated: true },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.UpsertConversationKeyRequest
+ */
+export const UpsertConversationKeyRequest = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.UpsertConversationKeyRequest",
+  () => [
+    { no: 1, name: "conversation_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "version", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+    { no: 3, name: "algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 4, name: "envelopes", kind: "message", T: ConversationKeyEnvelope, repeated: true },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.GetConversationKeyRequest
+ */
+export const GetConversationKeyRequest = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.GetConversationKeyRequest",
+  () => [
+    { no: 1, name: "conversation_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "version", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+  ],
+);
+
+/**
  * @generated from message messenger.v1.Message
  */
 export const Message = /*@__PURE__*/ proto3.makeMessageType(
@@ -227,6 +428,15 @@ export const Message = /*@__PURE__*/ proto3.makeMessageType(
     { no: 4, name: "to", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 5, name: "text", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 6, name: "created_at", kind: "message", T: Timestamp },
+    { no: 7, name: "ciphertext", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 8, name: "nonce", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 9, name: "sender_key_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 10, name: "conversation_key_version", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+    { no: 11, name: "encrypted", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
+    { no: 12, name: "recipient_signed_prekey_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 13, name: "recipient_signed_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 14, name: "recipient_one_time_prekey_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 15, name: "recipient_one_time_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
   ],
 );
 
@@ -239,6 +449,15 @@ export const SendMessageRequest = /*@__PURE__*/ proto3.makeMessageType(
     { no: 1, name: "to", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 2, name: "text", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 3, name: "conversation_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 4, name: "ciphertext", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 5, name: "nonce", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 6, name: "sender_key_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 7, name: "conversation_key_version", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+    { no: 8, name: "encrypted", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
+    { no: 9, name: "recipient_signed_prekey_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 10, name: "recipient_signed_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 11, name: "recipient_one_time_prekey_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 12, name: "recipient_one_time_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
   ],
 );
 

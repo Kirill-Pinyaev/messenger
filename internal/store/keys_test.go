@@ -1,0 +1,127 @@
+package store
+
+import (
+	"context"
+	"testing"
+)
+
+func TestMemoryKeyStoreIdentityAndConversationKeys(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryKeyStore()
+	ctx := context.Background()
+
+	identity, err := store.UpsertIdentityKey(ctx, IdentityKey{
+		Username:  "alice",
+		KeyID:     "alice-key-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{1, 2, 3},
+	})
+	if err != nil {
+		t.Fatalf("UpsertIdentityKey() error = %v", err)
+	}
+	if identity.KeyID != "alice-key-1" || identity.Algorithm != "P256-HKDF-AESGCM" {
+		t.Fatalf("UpsertIdentityKey() = %+v", identity)
+	}
+
+	gotIdentity, err := store.GetIdentityKey(ctx, "alice")
+	if err != nil {
+		t.Fatalf("GetIdentityKey() error = %v", err)
+	}
+	if gotIdentity.KeyID != "alice-key-1" || len(gotIdentity.PublicKey) != 3 {
+		t.Fatalf("GetIdentityKey() = %+v", gotIdentity)
+	}
+
+	groupKey, err := store.UpsertConversationKey(ctx, ConversationKey{
+		ConversationID: "group-1",
+		Version:        2,
+		Algorithm:      "AES-GCM",
+		CreatedBy:      "alice",
+		Envelopes: []ConversationKeyEnvelope{
+			{
+				Username:       "alice",
+				EncryptedKey:   []byte{9, 9, 9},
+				Nonce:          []byte{7, 7, 7},
+				SenderKeyID:    "alice-key-1",
+				RecipientKeyID: "alice-key-1",
+			},
+			{
+				Username:       "bob",
+				EncryptedKey:   []byte{8, 8, 8},
+				Nonce:          []byte{6, 6, 6},
+				SenderKeyID:    "alice-key-1",
+				RecipientKeyID: "bob-key-1",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpsertConversationKey() error = %v", err)
+	}
+	if groupKey.Version != 2 || len(groupKey.Envelopes) != 2 {
+		t.Fatalf("UpsertConversationKey() = %+v", groupKey)
+	}
+
+	gotGroupKey, err := store.GetConversationKey(ctx, "group-1", 2)
+	if err != nil {
+		t.Fatalf("GetConversationKey() error = %v", err)
+	}
+	if gotGroupKey.CreatedBy != "alice" || gotGroupKey.Envelopes[1].RecipientKeyID != "bob-key-1" {
+		t.Fatalf("GetConversationKey() = %+v", gotGroupKey)
+	}
+}
+
+func TestMemoryKeyStorePrekeyBundleAcquisitionConsumesOneTimeKeys(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryKeyStore()
+	ctx := context.Background()
+
+	if _, err := store.UpsertIdentityKey(ctx, IdentityKey{
+		Username:  "bob",
+		KeyID:     "bob-identity-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{1, 2, 3},
+	}); err != nil {
+		t.Fatalf("UpsertIdentityKey() error = %v", err)
+	}
+
+	if _, err := store.UpsertSignedPrekey(ctx, SignedPrekey{
+		Username:  "bob",
+		KeyID:     "bob-signed-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{4, 5, 6},
+	}); err != nil {
+		t.Fatalf("UpsertSignedPrekey() error = %v", err)
+	}
+
+	if err := store.PutOneTimePrekeys(ctx, "bob", []OneTimePrekey{
+		{Username: "bob", KeyID: "bob-otp-1", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{7, 8, 9}},
+		{Username: "bob", KeyID: "bob-otp-2", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{10, 11, 12}},
+	}); err != nil {
+		t.Fatalf("PutOneTimePrekeys() error = %v", err)
+	}
+
+	first, err := store.AcquirePrekeyBundle(ctx, "bob")
+	if err != nil {
+		t.Fatalf("AcquirePrekeyBundle(first) error = %v", err)
+	}
+	if first.IdentityKey.KeyID != "bob-identity-1" || first.SignedPrekey.KeyID != "bob-signed-1" || first.OneTimePrekey.KeyID != "bob-otp-1" {
+		t.Fatalf("AcquirePrekeyBundle(first) = %+v", first)
+	}
+
+	second, err := store.AcquirePrekeyBundle(ctx, "bob")
+	if err != nil {
+		t.Fatalf("AcquirePrekeyBundle(second) error = %v", err)
+	}
+	if second.OneTimePrekey.KeyID != "bob-otp-2" {
+		t.Fatalf("AcquirePrekeyBundle(second) = %+v", second)
+	}
+
+	third, err := store.AcquirePrekeyBundle(ctx, "bob")
+	if err != nil {
+		t.Fatalf("AcquirePrekeyBundle(third) error = %v", err)
+	}
+	if third.OneTimePrekey.KeyID != "" {
+		t.Fatalf("AcquirePrekeyBundle(third) = %+v", third)
+	}
+}

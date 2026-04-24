@@ -3,7 +3,7 @@
 /* eslint-disable */
 // @ts-nocheck
 
-import { AddGroupMembersRequest, Conversation, CreateGroupConversationRequest, DeleteMessageRequest, GetMessagesRequest, GetMessagesResponse, GetProfileRequest, LeaveGroupConversationRequest, ListConversationsResponse, LoginRequest, LoginResponse, Message, Profile, RegisterRequest, RemoveGroupMemberRequest, SearchMessagesRequest, SearchMessagesResponse, SearchUsersRequest, SearchUsersResponse, SendMessageRequest, ServerEvent, StreamEventsRequest, TransferGroupAdminRequest, UpdateProfileRequest } from "./messenger_pb.js";
+import { AcquirePrekeyBundleRequest, AddGroupMembersRequest, Conversation, ConversationKey, CreateGroupConversationRequest, DeleteMessageRequest, GetConversationKeyRequest, GetIdentityKeyRequest, GetIdentityKeysRequest, GetIdentityKeysResponse, GetMessagesRequest, GetMessagesResponse, GetProfileRequest, IdentityKey, LeaveGroupConversationRequest, ListConversationsResponse, LoginRequest, LoginResponse, Message, PrekeyBundle, Profile, PublishIdentityKeyRequest, PublishPrekeyBundleRequest, RegisterRequest, RemoveGroupMemberRequest, SearchMessagesRequest, SearchMessagesResponse, SearchUsersRequest, SearchUsersResponse, SendMessageRequest, ServerEvent, StreamEventsRequest, TransferGroupAdminRequest, UpdateProfileRequest, UpsertConversationKeyRequest } from "./messenger_pb.js";
 import { Empty, MethodKind } from "@bufbuild/protobuf";
 
 /**
@@ -85,6 +85,51 @@ export const UserService = {
       kind: MethodKind.Unary,
     },
     /**
+     * @generated from rpc messenger.v1.UserService.PublishIdentityKey
+     */
+    publishIdentityKey: {
+      name: "PublishIdentityKey",
+      I: PublishIdentityKeyRequest,
+      O: IdentityKey,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.UserService.PublishPrekeyBundle
+     */
+    publishPrekeyBundle: {
+      name: "PublishPrekeyBundle",
+      I: PublishPrekeyBundleRequest,
+      O: PrekeyBundle,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.UserService.GetIdentityKey
+     */
+    getIdentityKey: {
+      name: "GetIdentityKey",
+      I: GetIdentityKeyRequest,
+      O: IdentityKey,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.UserService.GetIdentityKeys
+     */
+    getIdentityKeys: {
+      name: "GetIdentityKeys",
+      I: GetIdentityKeysRequest,
+      O: GetIdentityKeysResponse,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.UserService.AcquirePrekeyBundle
+     */
+    acquirePrekeyBundle: {
+      name: "AcquirePrekeyBundle",
+      I: AcquirePrekeyBundleRequest,
+      O: PrekeyBundle,
+      kind: MethodKind.Unary,
+    },
+    /**
      * @generated from rpc messenger.v1.UserService.CreateGroupConversation
      */
     createGroupConversation: {
@@ -127,6 +172,24 @@ export const UserService = {
       name: "TransferGroupAdmin",
       I: TransferGroupAdminRequest,
       O: Conversation,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.UserService.UpsertConversationKey
+     */
+    upsertConversationKey: {
+      name: "UpsertConversationKey",
+      I: UpsertConversationKeyRequest,
+      O: ConversationKey,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.UserService.GetConversationKey
+     */
+    getConversationKey: {
+      name: "GetConversationKey",
+      I: GetConversationKeyRequest,
+      O: ConversationKey,
       kind: MethodKind.Unary,
     },
   }

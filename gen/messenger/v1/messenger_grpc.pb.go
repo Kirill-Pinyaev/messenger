@@ -202,11 +202,18 @@ const (
 	UserService_UpdateProfile_FullMethodName           = "/messenger.v1.UserService/UpdateProfile"
 	UserService_SearchUsers_FullMethodName             = "/messenger.v1.UserService/SearchUsers"
 	UserService_ListConversations_FullMethodName       = "/messenger.v1.UserService/ListConversations"
+	UserService_PublishIdentityKey_FullMethodName      = "/messenger.v1.UserService/PublishIdentityKey"
+	UserService_PublishPrekeyBundle_FullMethodName     = "/messenger.v1.UserService/PublishPrekeyBundle"
+	UserService_GetIdentityKey_FullMethodName          = "/messenger.v1.UserService/GetIdentityKey"
+	UserService_GetIdentityKeys_FullMethodName         = "/messenger.v1.UserService/GetIdentityKeys"
+	UserService_AcquirePrekeyBundle_FullMethodName     = "/messenger.v1.UserService/AcquirePrekeyBundle"
 	UserService_CreateGroupConversation_FullMethodName = "/messenger.v1.UserService/CreateGroupConversation"
 	UserService_AddGroupMembers_FullMethodName         = "/messenger.v1.UserService/AddGroupMembers"
 	UserService_RemoveGroupMember_FullMethodName       = "/messenger.v1.UserService/RemoveGroupMember"
 	UserService_LeaveGroupConversation_FullMethodName  = "/messenger.v1.UserService/LeaveGroupConversation"
 	UserService_TransferGroupAdmin_FullMethodName      = "/messenger.v1.UserService/TransferGroupAdmin"
+	UserService_UpsertConversationKey_FullMethodName   = "/messenger.v1.UserService/UpsertConversationKey"
+	UserService_GetConversationKey_FullMethodName      = "/messenger.v1.UserService/GetConversationKey"
 )
 
 // UserServiceClient is the client API for UserService service.
@@ -217,11 +224,18 @@ type UserServiceClient interface {
 	UpdateProfile(ctx context.Context, in *UpdateProfileRequest, opts ...grpc.CallOption) (*Profile, error)
 	SearchUsers(ctx context.Context, in *SearchUsersRequest, opts ...grpc.CallOption) (*SearchUsersResponse, error)
 	ListConversations(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListConversationsResponse, error)
+	PublishIdentityKey(ctx context.Context, in *PublishIdentityKeyRequest, opts ...grpc.CallOption) (*IdentityKey, error)
+	PublishPrekeyBundle(ctx context.Context, in *PublishPrekeyBundleRequest, opts ...grpc.CallOption) (*PrekeyBundle, error)
+	GetIdentityKey(ctx context.Context, in *GetIdentityKeyRequest, opts ...grpc.CallOption) (*IdentityKey, error)
+	GetIdentityKeys(ctx context.Context, in *GetIdentityKeysRequest, opts ...grpc.CallOption) (*GetIdentityKeysResponse, error)
+	AcquirePrekeyBundle(ctx context.Context, in *AcquirePrekeyBundleRequest, opts ...grpc.CallOption) (*PrekeyBundle, error)
 	CreateGroupConversation(ctx context.Context, in *CreateGroupConversationRequest, opts ...grpc.CallOption) (*Conversation, error)
 	AddGroupMembers(ctx context.Context, in *AddGroupMembersRequest, opts ...grpc.CallOption) (*Conversation, error)
 	RemoveGroupMember(ctx context.Context, in *RemoveGroupMemberRequest, opts ...grpc.CallOption) (*Conversation, error)
 	LeaveGroupConversation(ctx context.Context, in *LeaveGroupConversationRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	TransferGroupAdmin(ctx context.Context, in *TransferGroupAdminRequest, opts ...grpc.CallOption) (*Conversation, error)
+	UpsertConversationKey(ctx context.Context, in *UpsertConversationKeyRequest, opts ...grpc.CallOption) (*ConversationKey, error)
+	GetConversationKey(ctx context.Context, in *GetConversationKeyRequest, opts ...grpc.CallOption) (*ConversationKey, error)
 }
 
 type userServiceClient struct {
@@ -266,6 +280,56 @@ func (c *userServiceClient) ListConversations(ctx context.Context, in *emptypb.E
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListConversationsResponse)
 	err := c.cc.Invoke(ctx, UserService_ListConversations_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) PublishIdentityKey(ctx context.Context, in *PublishIdentityKeyRequest, opts ...grpc.CallOption) (*IdentityKey, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IdentityKey)
+	err := c.cc.Invoke(ctx, UserService_PublishIdentityKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) PublishPrekeyBundle(ctx context.Context, in *PublishPrekeyBundleRequest, opts ...grpc.CallOption) (*PrekeyBundle, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrekeyBundle)
+	err := c.cc.Invoke(ctx, UserService_PublishPrekeyBundle_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) GetIdentityKey(ctx context.Context, in *GetIdentityKeyRequest, opts ...grpc.CallOption) (*IdentityKey, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IdentityKey)
+	err := c.cc.Invoke(ctx, UserService_GetIdentityKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) GetIdentityKeys(ctx context.Context, in *GetIdentityKeysRequest, opts ...grpc.CallOption) (*GetIdentityKeysResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetIdentityKeysResponse)
+	err := c.cc.Invoke(ctx, UserService_GetIdentityKeys_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) AcquirePrekeyBundle(ctx context.Context, in *AcquirePrekeyBundleRequest, opts ...grpc.CallOption) (*PrekeyBundle, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrekeyBundle)
+	err := c.cc.Invoke(ctx, UserService_AcquirePrekeyBundle_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -322,6 +386,26 @@ func (c *userServiceClient) TransferGroupAdmin(ctx context.Context, in *Transfer
 	return out, nil
 }
 
+func (c *userServiceClient) UpsertConversationKey(ctx context.Context, in *UpsertConversationKeyRequest, opts ...grpc.CallOption) (*ConversationKey, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConversationKey)
+	err := c.cc.Invoke(ctx, UserService_UpsertConversationKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) GetConversationKey(ctx context.Context, in *GetConversationKeyRequest, opts ...grpc.CallOption) (*ConversationKey, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConversationKey)
+	err := c.cc.Invoke(ctx, UserService_GetConversationKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // UserServiceServer is the server API for UserService service.
 // All implementations must embed UnimplementedUserServiceServer
 // for forward compatibility.
@@ -330,11 +414,18 @@ type UserServiceServer interface {
 	UpdateProfile(context.Context, *UpdateProfileRequest) (*Profile, error)
 	SearchUsers(context.Context, *SearchUsersRequest) (*SearchUsersResponse, error)
 	ListConversations(context.Context, *emptypb.Empty) (*ListConversationsResponse, error)
+	PublishIdentityKey(context.Context, *PublishIdentityKeyRequest) (*IdentityKey, error)
+	PublishPrekeyBundle(context.Context, *PublishPrekeyBundleRequest) (*PrekeyBundle, error)
+	GetIdentityKey(context.Context, *GetIdentityKeyRequest) (*IdentityKey, error)
+	GetIdentityKeys(context.Context, *GetIdentityKeysRequest) (*GetIdentityKeysResponse, error)
+	AcquirePrekeyBundle(context.Context, *AcquirePrekeyBundleRequest) (*PrekeyBundle, error)
 	CreateGroupConversation(context.Context, *CreateGroupConversationRequest) (*Conversation, error)
 	AddGroupMembers(context.Context, *AddGroupMembersRequest) (*Conversation, error)
 	RemoveGroupMember(context.Context, *RemoveGroupMemberRequest) (*Conversation, error)
 	LeaveGroupConversation(context.Context, *LeaveGroupConversationRequest) (*emptypb.Empty, error)
 	TransferGroupAdmin(context.Context, *TransferGroupAdminRequest) (*Conversation, error)
+	UpsertConversationKey(context.Context, *UpsertConversationKeyRequest) (*ConversationKey, error)
+	GetConversationKey(context.Context, *GetConversationKeyRequest) (*ConversationKey, error)
 	mustEmbedUnimplementedUserServiceServer()
 }
 
@@ -357,6 +448,21 @@ func (UnimplementedUserServiceServer) SearchUsers(context.Context, *SearchUsersR
 func (UnimplementedUserServiceServer) ListConversations(context.Context, *emptypb.Empty) (*ListConversationsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListConversations not implemented")
 }
+func (UnimplementedUserServiceServer) PublishIdentityKey(context.Context, *PublishIdentityKeyRequest) (*IdentityKey, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PublishIdentityKey not implemented")
+}
+func (UnimplementedUserServiceServer) PublishPrekeyBundle(context.Context, *PublishPrekeyBundleRequest) (*PrekeyBundle, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PublishPrekeyBundle not implemented")
+}
+func (UnimplementedUserServiceServer) GetIdentityKey(context.Context, *GetIdentityKeyRequest) (*IdentityKey, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetIdentityKey not implemented")
+}
+func (UnimplementedUserServiceServer) GetIdentityKeys(context.Context, *GetIdentityKeysRequest) (*GetIdentityKeysResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetIdentityKeys not implemented")
+}
+func (UnimplementedUserServiceServer) AcquirePrekeyBundle(context.Context, *AcquirePrekeyBundleRequest) (*PrekeyBundle, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AcquirePrekeyBundle not implemented")
+}
 func (UnimplementedUserServiceServer) CreateGroupConversation(context.Context, *CreateGroupConversationRequest) (*Conversation, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateGroupConversation not implemented")
 }
@@ -371,6 +477,12 @@ func (UnimplementedUserServiceServer) LeaveGroupConversation(context.Context, *L
 }
 func (UnimplementedUserServiceServer) TransferGroupAdmin(context.Context, *TransferGroupAdminRequest) (*Conversation, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TransferGroupAdmin not implemented")
+}
+func (UnimplementedUserServiceServer) UpsertConversationKey(context.Context, *UpsertConversationKeyRequest) (*ConversationKey, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpsertConversationKey not implemented")
+}
+func (UnimplementedUserServiceServer) GetConversationKey(context.Context, *GetConversationKeyRequest) (*ConversationKey, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetConversationKey not implemented")
 }
 func (UnimplementedUserServiceServer) mustEmbedUnimplementedUserServiceServer() {}
 func (UnimplementedUserServiceServer) testEmbeddedByValue()                     {}
@@ -465,6 +577,96 @@ func _UserService_ListConversations_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UserService_PublishIdentityKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PublishIdentityKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).PublishIdentityKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_PublishIdentityKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).PublishIdentityKey(ctx, req.(*PublishIdentityKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_PublishPrekeyBundle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PublishPrekeyBundleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).PublishPrekeyBundle(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_PublishPrekeyBundle_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).PublishPrekeyBundle(ctx, req.(*PublishPrekeyBundleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_GetIdentityKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetIdentityKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).GetIdentityKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_GetIdentityKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).GetIdentityKey(ctx, req.(*GetIdentityKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_GetIdentityKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetIdentityKeysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).GetIdentityKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_GetIdentityKeys_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).GetIdentityKeys(ctx, req.(*GetIdentityKeysRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_AcquirePrekeyBundle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcquirePrekeyBundleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).AcquirePrekeyBundle(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_AcquirePrekeyBundle_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).AcquirePrekeyBundle(ctx, req.(*AcquirePrekeyBundleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _UserService_CreateGroupConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateGroupConversationRequest)
 	if err := dec(in); err != nil {
@@ -555,6 +757,42 @@ func _UserService_TransferGroupAdmin_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UserService_UpsertConversationKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertConversationKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).UpsertConversationKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_UpsertConversationKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).UpsertConversationKey(ctx, req.(*UpsertConversationKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_GetConversationKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetConversationKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).GetConversationKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_GetConversationKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).GetConversationKey(ctx, req.(*GetConversationKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // UserService_ServiceDesc is the grpc.ServiceDesc for UserService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -579,6 +817,26 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _UserService_ListConversations_Handler,
 		},
 		{
+			MethodName: "PublishIdentityKey",
+			Handler:    _UserService_PublishIdentityKey_Handler,
+		},
+		{
+			MethodName: "PublishPrekeyBundle",
+			Handler:    _UserService_PublishPrekeyBundle_Handler,
+		},
+		{
+			MethodName: "GetIdentityKey",
+			Handler:    _UserService_GetIdentityKey_Handler,
+		},
+		{
+			MethodName: "GetIdentityKeys",
+			Handler:    _UserService_GetIdentityKeys_Handler,
+		},
+		{
+			MethodName: "AcquirePrekeyBundle",
+			Handler:    _UserService_AcquirePrekeyBundle_Handler,
+		},
+		{
 			MethodName: "CreateGroupConversation",
 			Handler:    _UserService_CreateGroupConversation_Handler,
 		},
@@ -597,6 +855,14 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TransferGroupAdmin",
 			Handler:    _UserService_TransferGroupAdmin_Handler,
+		},
+		{
+			MethodName: "UpsertConversationKey",
+			Handler:    _UserService_UpsertConversationKey_Handler,
+		},
+		{
+			MethodName: "GetConversationKey",
+			Handler:    _UserService_GetConversationKey_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

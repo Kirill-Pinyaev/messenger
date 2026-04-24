@@ -1,228 +1,279 @@
 # Messenger — контекст проекта для ИИ-агентов
 
-_Последнее обновление: 2026-04-24 (добавлены настройки)_
+_Последнее обновление: 2026-04-24 (добавлены prekey bundle для direct E2EE и атомарная server-side ротация group keys)_
 
 ## Общее
 
-Дипломный проект: мессенджер с gRPC-Web фронтендом и Go бэкендом.
+Дипломный проект: мессенджер с Go-бэкендом, gRPC/gRPC-Web API, Web-клиентом на Vanilla JS и подготовленным контрактом для второй платформы.
 
-- **Бэкенд**: Go, connectrpc, PostgreSQL
-- **Фронтенд**: Vanilla JS (ES modules), Vite, connectrpc/gRPC-Web, bufbuild protobuf
-- **Нет фреймворков** (ни React, ни Vue): весь UI — innerHTML-шаблоны + ручная привязка событий
+Текущий приоритет разработки:
+- сначала доводится `server + web + E2EE`;
+- Android ещё не реализован в рабочем дереве;
+- при значимых изменениях `proto`, state-модели, key lifecycle и архитектуры нужно обновлять этот файл.
 
----
+## Актуальная структура
 
-## Структура проекта
-
-```
+```text
 messenger/
-├── api/proto/messenger/v1/messenger.proto  — gRPC схема
-├── cmd/server/main.go                      — точка входа сервера
+├── api/proto/messenger/v1/messenger.proto
+├── cmd/server/main.go
 ├── internal/
-│   ├── auth/         — JWT + bcrypt
-│   ├── grpcapi/      — gRPC-сервер (server.go)
-│   └── store/        — репозитории (memory + postgres)
+│   ├── auth/                    — регистрация, логин, токены
+│   ├── grpcapi/server.go        — gRPC API
+│   └── store/
+│       ├── users.go             — user store interface + memory
+│       ├── postgres_users.go    — postgres user store
+│       ├── messages.go          — message store interface + memory
+│       ├── postgres.go          — postgres message store
+│       ├── conversations.go     — группы, роли, membership rules
+│       ├── postgres_conversations.go
+│       ├── keys.go              — identity keys + group key packages (memory)
+│       └── postgres_keys.go     — identity keys + group key packages (postgres)
+├── gen/messenger/v1/            — Go-код, сгенерированный из proto
+├── scripts/protoc.sh            — скачивает/кеширует protoc локально
 ├── web/
-│   ├── index.html
-│   └── src/
-│       ├── main.js       — весь UI (1700 строк)
-│       ├── styles.css    — весь CSS (~525 строк)
-│       └── lib/
-│           ├── api.js                — createMessengerClients()
-│           ├── auth-ui.js            — loginFeedback()
-│           ├── chat-state.js         — чистые функции над state
-│           ├── group-editor.js       — addDraftMember / removeDraftMember
-│           └── group-permissions.js  — canManageGroupMembers и др.
+│   ├── package.json
+│   ├── src/main.js              — основной UI и orchestration
+│   └── src/lib/
+│       ├── api.js
+│       ├── auth-ui.js
+│       ├── chat-state.js
+│       ├── e2ee.js              — WebCrypto helper-ы
+│       ├── group-editor.js
+│       └── group-permissions.js
 └── CLAUDE.md
 ```
 
----
+## Proto и публичные контракты
 
-## Фронтенд: архитектура
+`messenger.proto` уже включает:
+- обычные auth/user/message RPC;
+- группы и роли (`CreateGroupConversation`, `AddGroupMembers`, `RemoveGroupMember`, `LeaveGroupConversation`, `TransferGroupAdmin`);
+- события `conversation_removed`;
+- E2EE-сущности:
+  - `IdentityKey`
+  - `PublishIdentityKey`
+  - `PublishPrekeyBundle`
+  - `GetIdentityKey`
+  - `GetIdentityKeys`
+  - `AcquirePrekeyBundle`
+  - `SignedPrekey`
+  - `OneTimePrekey`
+  - `PrekeyBundle`
+  - `ConversationKeyEnvelope`
+  - `ConversationKey`
+  - `UpsertConversationKey`
+  - `GetConversationKey`
+  - `GroupKeyUpdate`
+- encrypted message fields в `Message` / `SendMessageRequest`:
+  - `ciphertext`
+  - `nonce`
+  - `sender_key_id`
+  - `conversation_key_version`
+  - `encrypted`
+  - `recipient_signed_prekey_id`
+  - `recipient_signed_prekey_public`
+  - `recipient_one_time_prekey_id`
+  - `recipient_one_time_prekey_public`
 
-### Рендер
+Замечание:
+- поле `text` в `Message` пока сохранено для совместимости, но в E2EE flow серверный Web-путь использует ciphertext;
+- `GetConversationKey(version=0)` трактуется как запрос последней версии группового ключа.
 
-- Единый объект `state` (см. ниже).
-- `render()` → `renderChat()` + `bindChatEvents()` (или `renderAuth()` + `bindAuthEvents()`).
-- Каждый `render()` полностью заменяет `app.innerHTML` → все DOM-узлы пересоздаются → event listeners навешиваются заново в bind-функциях.
-- **Исключения без полного render()** (патч DOM напрямую, чтобы не было мерцания):
-  - `patchGroupUserList()` — список пользователей в модале создания группы при поиске.
-  - `bindGroupToggleHandlers()` — чекбоксы участников группы.
-  - `patchSearchUI()` — блок сообщений и счётчик навигации при поиске сообщений.
+## Бэкенд
 
-### state (main.js:106)
+### Что реализовано
 
-```js
-{
-  token, username, profile,
-  conversations,          // Array — список диалогов
-  profiles,               // Map<username, profile>
-  messages,               // Map<conversationId, message[]>
-  activeConversationId,
-  activePeer,
-  userSearchQuery, userSearchResults,
-  messageSearchOpen,      // bool — показать ли поле поиска в шапке
-  messageSearchQuery,     // raw (не trimmed) — .trim() при поиске
-  messageSearchResults, messageSearchIndex,
-  selectedMessageId,
-  localUnread,            // Map<conversationId, number> — локальный счётчик непрочитанных
-  groupEditorOpen, groupEditorMode,   // "create" | "edit"
-  groupEditorConversationId,
-  groupTitleDraft, groupMemberQuery,
-  groupSearchResults, groupSelectedMembers,
-  streamAbort, streamRetryTimer,
-  onlineUsers,            // Set<username>
-  status,                 // "connected" | "disconnected" | "reconnecting"
-  authMode,               // "login" | "register"
-  authMessage, authError, showRegisterPrompt,
-  showProfileEditor,
-  showSelfProfile,        // модал своего профиля
-  showConvProfile,        // модал профиля собеседника / группы
-  profileDraft,
+- `internal/grpcapi/server.go` обслуживает:
+  - профили и поиск пользователей;
+  - личные и групповые диалоги;
+  - роли в группе;
+  - identity key publication/fetch;
+  - signed prekeys + one-time prekeys;
+  - atomic prekey bundle acquisition;
+  - group conversation key packages;
+  - server-side atomic membership + group key rotation, если клиент передаёт `initial_key` / `next_key`;
+  - encrypted message delivery.
+- Сервер хранит:
+  - пользователей;
+  - сообщения;
+  - группы и membership rules;
+  - identity public keys;
+  - версии групповых ключей и envelopes.
+
+### Message model
+
+`store.Message` теперь поддерживает оба режима:
+
+```go
+type Message struct {
+    ID             int64
+    ConversationID string
+    From           string
+    To             string
+    Text           string
+    Ciphertext     []byte
+    Nonce          []byte
+    SenderKeyID    string
+    KeyVersion     int32
+    Encrypted      bool
+    RecipientSignedPrekeyID     string
+    RecipientSignedPrekeyPublic []byte
+    RecipientOneTimePrekeyID    string
+    RecipientOneTimePrekeyPublic []byte
+    TS             time.Time
 }
 ```
 
-### Ключевые функции
+Поведение:
+- plaintext-путь всё ещё не удалён полностью;
+- encrypted message требует `ciphertext + nonce + sender_key_id`;
+- PostgreSQL search ищет только по `encrypted = FALSE`, потому что сервер не умеет искать по plaintext внутри E2EE.
 
-| Функция | Назначение |
-|---|---|
-| `render()` | Точка входа рендера. Ветвится по `state.token`. |
-| `renderChat()` | Строит весь `app.innerHTML` для чата. |
-| `bindChatEvents()` | Навешивает все listeners после render. |
-| `patchSearchUI()` | Патч только `#messages` + `#search-nav-area` при поиске. |
-| `patchGroupUserList()` | Патч только `#group-user-list` при вводе в поиск группы. |
-| `bindGroupToggleHandlers()` | Listeners на `[data-group-toggle]` в модале группы. |
-| `renderMessages(msgs, searchQuery, searchCurrentMsgId)` | HTML сообщений с подсветкой поиска. |
-| `openConversation(id)` | Открывает диалог, сбрасывает search/unread. |
-| `handleServerEvent(event)` | Обработчик Server-Sent Events (message, profile, conversation, online, deleted). |
-| `resetSession()` | Полный сброс state при logout. |
-| `openEventStream()` | Запускает SSE поток, авто-реконнект. |
+### Key store
 
-### UI-хелперы (main.js:32–103)
+Есть отдельный `KeyStore`:
+- `UpsertIdentityKey`
+- `GetIdentityKey`
+- `GetIdentityKeys`
+- `UpsertSignedPrekey`
+- `PutOneTimePrekeys`
+- `AcquirePrekeyBundle`
+- `UpsertConversationKey`
+- `GetConversationKey`
+- `DeleteUser`
+
+Отдельно есть `GroupStateStore`, который поверх conversation/key storage выполняет:
+- atomic `CreateGroupConversation + initial key`;
+- atomic `AddGroupMembers + next key`;
+- atomic `RemoveGroupMember + next key`;
+- atomic `LeaveGroupConversation + next key`, если после выхода группа остаётся непустой.
+
+## Фронтенд
+
+### Технологии
+
+- Vanilla JS
+- Vite
+- `@connectrpc/connect-web`
+- `@bufbuild/protobuf`
+- WebCrypto API
+
+### Основная архитектура UI
+
+- один глобальный `state`;
+- `render()` полностью пересобирает `app.innerHTML`;
+- часть UI патчится точечно без полного render:
+  - `patchGroupUserList()`
+  - `bindGroupToggleHandlers()`
+  - `patchSearchUI()`
+
+### Важные state-поля
+
+Помимо обычных `token / conversations / messages / profile / unread`, сейчас есть E2EE-состояние:
 
 ```js
-ic(name, size, color)          // SVG-иконка из словаря IC
-avatarHtml(name, color, size, online, borderColor)  // div.avatar
-shortTime(timestamp)           // "HH:MM" из protobuf Timestamp
-doubleCheck(read)              // SVG двойная галочка ✓✓
-highlightText(text, query)     // escapeHtml + <mark class="search-hl">
-getLastMessage(conversationId) // последнее сообщение из state.messages
-avatarColorFor(username)       // детерминированный цвет по хешу username
-getAvatarColor(username)       // avatarHex из профиля или avatarColorFor
-initials(name)                 // первые 2 буквы из слов имени
-displayName(username)          // обёртка над resolveDisplayName(state.profiles, state.profile, username)
-escapeHtml(value)              // XSS-защита для всех innerHTML вставок
+{
+  identity,        // локальная identity key pair + signed prekey + one-time prekeys текущего пользователя
+  identityKeys,    // Map<username, IdentityKey proto>
+  groupKeys,       // Map<conversationId:version, Uint8Array>
+  encryptionPrefs, // Map<conversationId, boolean>, локальный флаг E2EE on/off для конкретного чата
+  e2eeReady,       // опубликован ли identity key и загружено ли локальное состояние
+}
 ```
 
-### Модалы
+### E2EE на Web
 
-Модалы рендерятся как `position:fixed; inset:0` поверх `app-layout`.
-HTML: `app.innerHTML = "<div class='app-layout'>...</div>${groupEditorModal}${selfProfileModal}${convProfileModal}"`.
+`web/src/lib/e2ee.js` реализует:
+- генерацию identity key pair;
+- генерацию signed prekey и one-time prekeys;
+- экспорт/импорт identity state;
+- direct encryption/decryption через recipient prekey bundle;
+- group key package generation;
+- envelope decryption;
+- group message encryption/decryption;
+- сериализацию group key в `localStorage`.
 
-- `selfProfileModal` — показывается при `state.showSelfProfile`.
-- `convProfileModal` — показывается при `state.showConvProfile && activeConversation`:
-  - для DM: профиль собеседника + кнопка «Написать».
-  - для группы: информация + список участников (кликабельны, кроме себя → открывают DM).
-- `groupEditorModal` — создание/редактирование группы. Поиск патчит DOM напрямую через `patchGroupUserList()`, без `render()`.
+Текущая схема:
+- direct chats:
+  - Web публикует identity public key через `PublishIdentityKey`;
+  - Web публикует signed prekey + one-time prekeys через `PublishPrekeyBundle`;
+  - отправитель получает bundle получателя через `AcquirePrekeyBundle`;
+  - plaintext шифруется на клиенте на базе recipient signed/one-time prekeys;
+  - сервер получает только ciphertext.
+- group chats:
+  - клиент-инициатор генерирует симметричный group key;
+  - для каждого участника создаётся envelope;
+  - при create/add/remove/leave новый `GroupKeyUpdate` передаётся прямо в membership RPC;
+  - сервер фиксирует membership change и новую версию group key в одном действии;
+  - сообщения в группе шифруются group key и несут `conversation_key_version`.
 
 ### Поиск сообщений
 
-- Кнопка-лупа в шапке → `state.messageSearchOpen = true` → в шапке появляется `input#message-search`.
-- Ввод текста → `patchSearchUI()` (НЕ `render()`) — сохраняет позицию курсора.
-- `patchSearchUI()` обновляет: `#messages` (innerHTML через `renderMessages`) + `#search-nav-area` (счётчик + кнопки ↑↓).
-- Кнопка ✕ → `state.messageSearchOpen = false` → полный `render()`.
-- `state.messageSearchQuery` хранит raw значение (с пробелами), `.trim()` используется при API-запросе и рендере.
+После E2EE поиск на Web работает локально по уже расшифрованным сообщениям из `state.messages`.
 
-### CSS (styles.css)
+Важно:
+- серверный `SearchMessages` больше не годится как основной механизм поиска для encrypted history;
+- текущий Web-поиск не тянет всю историю со всех диалогов автоматически, а ищет по уже загруженным сообщениям.
 
-CSS-переменные (`:root`):
-- `--accent: #7c6fff` — акцент/фиолетовый
-- `--bubble-me: #7c6fff` — пузырёк своих сообщений
-- `--online: #3be8a0` — зелёный онлайн
-- `--danger: #ff5b5b` — красный
-- `--bg: #0b0b10`, `--sidebar: #0f0f18`, `--chat-bg: #0d0d16`
+### UX-поведение для E2EE
 
-Подсветка поиска:
-- `mark.search-hl` — янтарно-жёлтый фон `rgba(255,190,0,0.38)`
-- `.bubble.search-match` — тонкий жёлтый контур
-- `.bubble.search-current` — жирный жёлтый контур + glow
+- в пузырьках сообщений есть бейдж `E2EE`;
+- при ошибке дешифрования текст заменяется на `[Не удалось расшифровать]`;
+- `handleServerEvent()` для входящих сообщений сначала пытается расшифровать payload, потом обновляет `state.messages`.
+- если у собеседника ещё нет опубликованного `identity key`, прямой чат всё равно открывается в UI, но отправка сообщения останавливается с явным сообщением, что пользователь ещё не входил в зашифрованную версию и должен сначала опубликовать ключ.
+- в шапке чата есть локальный переключатель `E2EE`; если он выключен для конкретного `conversationId`, Web отправляет plaintext через тот же серверный контракт.
 
-Кликабельные элементы шапки:
-- `.chat-header-clickable` — обёртка вокруг аватара + имени → открывает `convProfileModal`
-- `.group-member-clickable` — участник группы в модале → открывает DM
+## Группы и права
 
-### Анти-мерцание паттерн
+Поддерживаются два уровня прав:
+- `admin`
+  - добавляет и удаляет любых участников;
+  - передаёт права другому;
+- `member`
+  - может добавлять участников;
+  - может удалять только тех, кого сам добавил.
 
-Если действие меняет только часть модала (чекбокс, список поиска, счётчик) — **не вызывать `render()`**, а патчить DOM напрямую:
-
-```js
-// ✓ Правильно — без мерцания
-const cb = element.querySelector(".checkbox");
-cb.className = `checkbox${checked ? " checked" : ""}`;
-patchGroupUserList();   // только список
-patchSearchUI();        // только сообщения + счётчик
-
-// ✗ Неправильно при каждом нажатии клавиши
-render(); // пересоздаёт всё, теряет фокус и позицию курсора
-```
-
-### Непрочитанные сообщения
-
-- `state.localUnread: Map<conversationId, number>` — локальный счётчик.
-- Инкрементируется в `handleServerEvent` при входящем сообщении в неактивный диалог.
-- Сбрасывается в `openConversation()`.
-- Значок `div.unread-badge` отображается в списке диалогов.
-
-### Двойные галочки
-
-- `doubleCheck(read)` — возвращает SVG двойной галочки.
-- `read=true` → белые (прочитано), `read=false` → полупрозрачные (отправлено).
-- Отображаются только на своих сообщениях, в `bubble-foot`.
-- Последнее сообщение — серые (отправлено), остальные — белые (прочитано). Это упрощение: реального ACK нет.
-
----
-
-## Бэкенд (Go)
-
-- `internal/grpcapi/server.go` — реализация всех gRPC методов.
-- `internal/store/` — интерфейсы + реализации (memory для тестов, postgres для prod).
-- JWT хранится в `localStorage` на фронтенде, передаётся в `Authorization: Bearer` заголовке.
-- SSE-стрим: `SubscribeEvents` в proto, реализован как Server-Sent Events поверх HTTP.
-
----
+При выходе администратора:
+- сервер передаёт роль следующему участнику.
 
 ## Сборка и запуск
 
+### Proto
+
+Не нужно вручную подготавливать `/tmp/protoc29`.
+
+Используется wrapper:
+- `scripts/protoc.sh`
+- он скачивает `protoc` в `.tools/protoc-29.3/` при первом запуске.
+
+### Команды
+
 ```bash
-# Фронтенд (dev)
-cd web && npm run dev
+make proto
+make test
+make test-integration
+make test-web
 
-# Фронтенд (prod build) — protoc нужен в /tmp/protoc29/
-cd web && npx vite build   # если protoc не установлен — только vite build
-
-# Бэкенд
-go run ./cmd/server
-
-# Docker
-docker-compose up
+cd web && npm run build
+docker compose up -d --build
 ```
 
----
+## Тесты
 
-## Настройки (Settings)
+Есть следующие уровни тестов:
+- `internal/auth` — unit tests;
+- `internal/grpcapi` — bufconn gRPC tests;
+- `internal/store` — memory tests;
+- `internal/store` с тегом `integration` — PostgreSQL + testcontainers;
+- `web/src/lib/*.test.js` — unit tests для чистых helper-модулей, включая `e2ee.js`.
 
-- `state.showSettings` — открыт ли модал настроек.
-- `state.settings` — объект `{ theme, accent, font, pushNotifications, messageSounds, compactMode }`, персистится в `localStorage("messenger-settings")`.
-- `applySettings()` — применяет CSS-переменные через `document.documentElement.style.setProperty()`. Вызывается при старте и при каждом изменении настройки.
-- `ACCENT_COLORS` — массив `[value, hoverValue]` для 6 цветов акцента.
-- Тема «Светлая» переопределяет переменные CSS через `style.setProperty()`, тёмная — сбрасывает их (`removeProperty()`), возвращая значения из `:root`.
-- Шрифт меняется через CSS-переменную `--font` (используется в `html, body, #app { font-family: var(--font, ...) }`).
-- Компактный режим добавляет класс `compact` на `document.body`.
-- Кнопка открытия: `id="open-settings"`, рядом с лого в шапке сайдбара (класс `.logo-settings-btn`).
-- Модал: `buildSettingsModal()`, включён в `app.innerHTML` как последний модал.
+Критическое правило проекта:
+- для нового функционального кода сначала пишутся тесты, потом реализация.
 
-## Известные упрощения
+## Текущие ограничения
 
-- Двойные галочки — визуальная имитация. Реальный read-receipt требует поддержки в proto/бэкенде.
-- `state.localUnread` персистится в `localStorage("messenger-unread")` и восстанавливается при reload. Сохраняется через `saveUnreadCounts()`, загружается через `loadUnreadCounts()` в `initializeSession()`. При logout очищается.
-- Поиск сообщений и пользователей в группе — debounce 300ms, API не вызывается на каждый символ.
+- E2EE реализован как учебная модель, а не production-grade Signal-протокол.
+- Direct E2EE уже использует identity key + signed prekey + one-time prekeys, но без полноценного double ratchet и без device-to-device multi-session model.
+- Server-side search по encrypted сообщениям не поддерживается.
+- Android-клиент ещё не начат и должен строиться поверх уже существующего `proto` и E2EE-контракта.

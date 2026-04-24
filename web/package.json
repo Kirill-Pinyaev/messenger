@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run gen && vite build",
-    "gen": "mkdir -p ./src/gen && /tmp/protoc29/bin/protoc --plugin=protoc-gen-es=./node_modules/.bin/protoc-gen-es --plugin=protoc-gen-connect-es=./node_modules/.bin/protoc-gen-connect-es -I /tmp/protoc29/include -I ../api/proto --es_out=target=js:./src/gen --connect-es_out=target=js:./src/gen ../api/proto/messenger/v1/messenger.proto",
+    "gen": "mkdir -p ./src/gen && ../scripts/protoc.sh --plugin=protoc-gen-es=./node_modules/.bin/protoc-gen-es --plugin=protoc-gen-connect-es=./node_modules/.bin/protoc-gen-connect-es -I ../.tools/protoc-29.3/include -I ../api/proto --es_out=target=js:./src/gen --connect-es_out=target=js:./src/gen ../api/proto/messenger/v1/messenger.proto",
     "preview": "vite preview"
   },
   "keywords": [],

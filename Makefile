@@ -1,6 +1,6 @@
 GOPATH := $(shell go env GOPATH)
-PROTOC ?= $(shell which protoc 2>/dev/null || echo /tmp/protoc29/bin/protoc)
-PROTOC_INCLUDE ?= /tmp/protoc29/include
+PROTOC ?= ./scripts/protoc.sh
+PROTOC_INCLUDE ?= ./.tools/protoc-29.3/include
 
 .PHONY: up down restart logs db-clean proto test test-integration test-web cover cover-html
 
