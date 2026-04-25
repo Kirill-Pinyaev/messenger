@@ -262,6 +262,105 @@ func TestServerMessageFlowAndStreaming(t *testing.T) {
 	}
 }
 
+func TestServerMediaFlow(t *testing.T) {
+	t.Setenv("MEDIA_DIR", t.TempDir())
+	authClient, _, messageClient, cleanup := newTestClients(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	registerAndLogin := func(username string) context.Context {
+		t.Helper()
+		if _, err := authClient.Register(ctx, &messengerv1.RegisterRequest{
+			Username: username,
+			Password: "secret",
+		}); err != nil {
+			t.Fatalf("Register(%s) error = %v", username, err)
+		}
+		loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
+			Username: username,
+			Password: "secret",
+		})
+		if err != nil {
+			t.Fatalf("Login(%s) error = %v", username, err)
+		}
+		return authContext(ctx, loginResp.GetToken())
+	}
+
+	aliceCtx := registerAndLogin("alice")
+	bobCtx := registerAndLogin("bob")
+
+	prepared, err := messageClient.PrepareMediaUpload(aliceCtx, &messengerv1.PrepareMediaUploadRequest{
+		Filename:  "cat.png",
+		MimeType:  "image/png",
+		SizeBytes: 128,
+		Kind:      messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE,
+	})
+	if err != nil {
+		t.Fatalf("PrepareMediaUpload() error = %v", err)
+	}
+	if prepared.GetMediaId() == "" || prepared.GetMaxSizeBytes() != store.MaxMediaSizeBytes {
+		t.Fatalf("PrepareMediaUpload() = %+v", prepared)
+	}
+
+	if _, err := messageClient.UploadMedia(aliceCtx, &messengerv1.UploadMediaRequest{
+		MediaId:    prepared.GetMediaId(),
+		Ciphertext: []byte{1, 2, 3, 4},
+		Nonce:      []byte{5, 6, 7},
+		Sha256:     []byte{8, 9, 10},
+		SizeBytes:  128,
+		MimeType:   "image/png",
+		Filename:   "cat.png",
+		Kind:       messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE,
+	}); err != nil {
+		t.Fatalf("UploadMedia() error = %v", err)
+	}
+
+	sent, err := messageClient.SendMessage(aliceCtx, &messengerv1.SendMessageRequest{
+		To: "bob",
+		Attachments: []*messengerv1.Attachment{{
+			AttachmentId:        "att-1",
+			Kind:                messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE,
+			Filename:            "cat.png",
+			MimeType:            "image/png",
+			SizeBytes:           128,
+			MediaId:             prepared.GetMediaId(),
+			EncryptedDescriptor: []byte{11, 12, 13},
+			DescriptorNonce:     []byte{14, 15, 16},
+			Sha256:              []byte{8, 9, 10},
+			CiphertextSize:      4,
+			Preview: &messengerv1.AttachmentPreview{
+				Width:  320,
+				Height: 240,
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("SendMessage(attachment) error = %v", err)
+	}
+	if len(sent.GetAttachments()) != 1 || sent.GetAttachments()[0].GetMediaId() != prepared.GetMediaId() {
+		t.Fatalf("SendMessage(attachment) = %+v", sent)
+	}
+
+	history, err := messageClient.GetMessages(bobCtx, &messengerv1.GetMessagesRequest{
+		WithUsername: "alice",
+		Limit:        10,
+	})
+	if err != nil {
+		t.Fatalf("GetMessages() error = %v", err)
+	}
+	if len(history.GetItems()) != 1 || len(history.GetItems()[0].GetAttachments()) != 1 {
+		t.Fatalf("GetMessages() = %+v", history.GetItems())
+	}
+
+	blob, err := messageClient.GetMedia(bobCtx, &messengerv1.GetMediaRequest{MediaId: prepared.GetMediaId()})
+	if err != nil {
+		t.Fatalf("GetMedia(bob) error = %v", err)
+	}
+	if len(blob.GetCiphertext()) != 4 || blob.GetFilename() != "cat.png" {
+		t.Fatalf("GetMedia() = %+v", blob)
+	}
+}
+
 func TestServerGroupConversationFlow(t *testing.T) {
 	t.Parallel()
 

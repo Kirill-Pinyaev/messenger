@@ -37,6 +37,9 @@ service MessageService {
   rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse);
   rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
   rpc DeleteMessage(DeleteMessageRequest) returns (google.protobuf.Empty);
+  rpc PrepareMediaUpload(PrepareMediaUploadRequest) returns (PrepareMediaUploadResponse);
+  rpc UploadMedia(UploadMediaRequest) returns (UploadMediaResponse);
+  rpc GetMedia(GetMediaRequest) returns (GetMediaResponse);
   rpc StreamEvents(StreamEventsRequest) returns (stream ServerEvent);
 }
 
@@ -263,6 +266,7 @@ message Message {
   bytes recipient_signed_prekey_public = 13;
   string recipient_one_time_prekey_id = 14;
   bytes recipient_one_time_prekey_public = 15;
+  repeated Attachment attachments = 16;
 }
 
 message SendMessageRequest {
@@ -278,6 +282,7 @@ message SendMessageRequest {
   bytes recipient_signed_prekey_public = 10;
   string recipient_one_time_prekey_id = 11;
   bytes recipient_one_time_prekey_public = 12;
+  repeated Attachment attachments = 13;
 }
 
 message GetMessagesRequest {
@@ -301,6 +306,74 @@ message SearchMessagesResponse {
 
 message DeleteMessageRequest {
   int64 message_id = 1;
+}
+
+enum AttachmentKind {
+  ATTACHMENT_KIND_UNSPECIFIED = 0;
+  ATTACHMENT_KIND_IMAGE = 1;
+  ATTACHMENT_KIND_VIDEO = 2;
+  ATTACHMENT_KIND_FILE = 3;
+}
+
+message AttachmentPreview {
+  int32 width = 1;
+  int32 height = 2;
+}
+
+message Attachment {
+  string attachment_id = 1;
+  AttachmentKind kind = 2;
+  string filename = 3;
+  string mime_type = 4;
+  int64 size_bytes = 5;
+  string media_id = 6;
+  bytes encrypted_descriptor = 7;
+  bytes descriptor_nonce = 8;
+  AttachmentPreview preview = 9;
+  bytes sha256 = 10;
+  int64 ciphertext_size = 11;
+}
+
+message PrepareMediaUploadRequest {
+  string filename = 1;
+  string mime_type = 2;
+  int64 size_bytes = 3;
+  AttachmentKind kind = 4;
+}
+
+message PrepareMediaUploadResponse {
+  string media_id = 1;
+  int64 max_size_bytes = 2;
+}
+
+message UploadMediaRequest {
+  string media_id = 1;
+  bytes ciphertext = 2;
+  bytes nonce = 3;
+  bytes sha256 = 4;
+  int64 size_bytes = 5;
+  string mime_type = 6;
+  string filename = 7;
+  AttachmentKind kind = 8;
+}
+
+message UploadMediaResponse {
+  string media_id = 1;
+}
+
+message GetMediaRequest {
+  string media_id = 1;
+}
+
+message GetMediaResponse {
+  string media_id = 1;
+  bytes ciphertext = 2;
+  bytes nonce = 3;
+  bytes sha256 = 4;
+  int64 size_bytes = 5;
+  string mime_type = 6;
+  string filename = 7;
+  AttachmentKind kind = 8;
 }
 
 message StreamEventsRequest {}

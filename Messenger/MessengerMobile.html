@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Messenger — Mobile</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%;font-family:'Inter',sans-serif;background:#0a0a12;}
+body{display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto;}
+::-webkit-scrollbar{width:0;height:0}
+
+:root{
+  --bg:#0b0b10; --panel:#13131e; --panel-2:#181828; --panel-hover:#1e1e30;
+  --chat-bg:#0d0d16; --bubble:#1a1a2e; --bubble-me:#7c6fff;
+  --text:#e8e8f0; --text-muted:#7070a0; --text-soft:#a0a0c8;
+  --accent:#7c6fff; --accent-2:#9380ff; --danger:#ff5b5b;
+  --online:#3be8a0; --divider:#1f1f32; --input-bg:#181828;
+}
+:root.light{
+  --bg:#f4f5f9; --panel:#ffffff; --panel-2:#f0f1f6; --panel-hover:#e8e9f0;
+  --chat-bg:#eef0f5; --bubble:#ffffff; --bubble-me:#7c6fff;
+  --text:#1a1a2a; --text-muted:#8a8aa8; --text-soft:#4a4a6a;
+  --accent:#7c6fff; --accent-2:#6759ff; --danger:#ef4444;
+  --online:#10b981; --divider:#e5e6ee; --input-bg:#f0f1f6;
+}
+input,textarea,button{font-family:inherit;outline:none}
+@keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes slideInRight{from{transform:translateX(100%)}to{transform:translateX(0)}}
+@keyframes slideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes popIn{0%{transform:scale(0.9);opacity:0}100%{transform:scale(1);opacity:1}}
+@keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.15);opacity:0.7}}
+@keyframes msgInMe{from{transform:translateX(30px);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes msgInOther{from{transform:translateX(-30px);opacity:0}to{transform:translateX(0);opacity:1}}
+.scr{animation:slideInRight .28s cubic-bezier(.22,.61,.36,1)}
+.scr-back{animation:slideInLeft .28s cubic-bezier(.22,.61,.36,1)}
+.msg-me{animation:msgInMe .25s cubic-bezier(.22,.61,.36,1)}
+.msg-other{animation:msgInOther .25s cubic-bezier(.22,.61,.36,1)}
+.sheet-overlay{animation:fadeIn .2s ease}
+.sheet{animation:slideUp .28s cubic-bezier(.22,.61,.36,1)}
+.pop{animation:popIn .22s cubic-bezier(.22,.61,.36,1)}
+.conv-enter{animation:slideUp .3s cubic-bezier(.22,.61,.36,1) both}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+// iOS.jsx — Simplified iOS 26 (Liquid Glass) device frame
+// Based on the iOS 26 UI Kit + Figma status bar spec. No assets, no deps.
+// Exports: IOSDevice, IOSStatusBar, IOSNavBar, IOSGlassPill, IOSList, IOSListRow, IOSKeyboard
+
+// ─────────────────────────────────────────────────────────────
+// Status bar
+// ─────────────────────────────────────────────────────────────
+function IOSStatusBar({ dark = false, time = '9:41' }) {
+  const c = dark ? '#fff' : '#000';
+  return (
+    <div style={{
+      display: 'flex', gap: 154, alignItems: 'center', justifyContent: 'center',
+      padding: '21px 24px 19px', boxSizing: 'border-box',
+      position: 'relative', zIndex: 20, width: '100%',
+    }}>
+      <div style={{ flex: 1, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', paddingTop: 1.5 }}>
+        <span style={{
+          fontFamily: '-apple-system, "SF Pro", system-ui', fontWeight: 590,
+          fontSize: 17, lineHeight: '22px', color: c,
+        }}>{time}</span>
+      </div>
+      <div style={{ flex: 1, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, paddingTop: 1, paddingRight: 1 }}>
+        <svg width="19" height="12" viewBox="0 0 19 12">
+          <rect x="0" y="7.5" width="3.2" height="4.5" rx="0.7" fill={c}/>
+          <rect x="4.8" y="5" width="3.2" height="7" rx="0.7" fill={c}/>
+          <rect x="9.6" y="2.5" width="3.2" height="9.5" rx="0.7" fill={c}/>
+          <rect x="14.4" y="0" width="3.2" height="12" rx="0.7" fill={c}/>
+        </svg>
+        <svg width="17" height="12" viewBox="0 0 17 12">
+          <path d="M8.5 3.2C10.8 3.2 12.9 4.1 14.4 5.6L15.5 4.5C13.7 2.7 11.2 1.5 8.5 1.5C5.8 1.5 3.3 2.7 1.5 4.5L2.6 5.6C4.1 4.1 6.2 3.2 8.5 3.2Z" fill={c}/>
+          <path d="M8.5 6.8C9.9 6.8 11.1 7.3 12 8.2L13.1 7.1C11.8 5.9 10.2 5.1 8.5 5.1C6.8 5.1 5.2 5.9 3.9 7.1L5 8.2C5.9 7.3 7.1 6.8 8.5 6.8Z" fill={c}/>
+          <circle cx="8.5" cy="10.5" r="1.5" fill={c}/>
+        </svg>
+        <svg width="27" height="13" viewBox="0 0 27 13">
+          <rect x="0.5" y="0.5" width="23" height="12" rx="3.5" stroke={c} strokeOpacity="0.35" fill="none"/>
+          <rect x="2" y="2" width="20" height="9" rx="2" fill={c}/>
+          <path d="M25 4.5V8.5C25.8 8.2 26.5 7.2 26.5 6.5C26.5 5.8 25.8 4.8 25 4.5Z" fill={c} fillOpacity="0.4"/>
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Liquid glass pill — blur + tint + shine
+// ─────────────────────────────────────────────────────────────
+function IOSGlassPill({ children, dark = false, style = {} }) {
+  return (
+    <div style={{
+      height: 44, minWidth: 44, borderRadius: 9999,
+      position: 'relative', overflow: 'hidden',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      boxShadow: dark
+        ? '0 2px 6px rgba(0,0,0,0.35), 0 6px 16px rgba(0,0,0,0.2)'
+        : '0 1px 3px rgba(0,0,0,0.07), 0 3px 10px rgba(0,0,0,0.06)',
+      ...style,
+    }}>
+      {/* blur + tint */}
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 9999,
+        backdropFilter: 'blur(12px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(12px) saturate(180%)',
+        background: dark ? 'rgba(120,120,128,0.28)' : 'rgba(255,255,255,0.5)',
+      }} />
+      {/* shine */}
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 9999,
+        boxShadow: dark
+          ? 'inset 1.5px 1.5px 1px rgba(255,255,255,0.15), inset -1px -1px 1px rgba(255,255,255,0.08)'
+          : 'inset 1.5px 1.5px 1px rgba(255,255,255,0.7), inset -1px -1px 1px rgba(255,255,255,0.4)',
+        border: dark ? '0.5px solid rgba(255,255,255,0.15)' : '0.5px solid rgba(0,0,0,0.06)',
+      }} />
+      <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', padding: '0 4px' }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Navigation bar — glass pills + large title
+// ─────────────────────────────────────────────────────────────
+function IOSNavBar({ title = 'Title', dark = false, trailingIcon = true }) {
+  const muted = dark ? 'rgba(255,255,255,0.6)' : '#404040';
+  const text = dark ? '#fff' : '#000';
+  const pillIcon = (content) => (
+    <IOSGlassPill dark={dark}>
+      <div style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {content}
+      </div>
+    </IOSGlassPill>
+  );
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 10,
+      paddingTop: 62, paddingBottom: 10, position: 'relative', zIndex: 5,
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '0 16px',
+      }}>
+        {/* back chevron */}
+        {pillIcon(
+          <svg width="12" height="20" viewBox="0 0 12 20" fill="none" style={{ marginLeft: -1 }}>
+            <path d="M10 2L2 10l8 8" stroke={muted} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        )}
+        {/* trailing ellipsis */}
+        {trailingIcon && pillIcon(
+          <svg width="22" height="6" viewBox="0 0 22 6">
+            <circle cx="3" cy="3" r="2.5" fill={muted}/>
+            <circle cx="11" cy="3" r="2.5" fill={muted}/>
+            <circle cx="19" cy="3" r="2.5" fill={muted}/>
+          </svg>
+        )}
+      </div>
+      {/* large title */}
+      <div style={{
+        padding: '0 16px',
+        fontFamily: '-apple-system, system-ui',
+        fontSize: 34, fontWeight: 700, lineHeight: '41px',
+        color: text, letterSpacing: 0.4,
+      }}>{title}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Grouped list (inset card, r:26) + row (52px)
+// ─────────────────────────────────────────────────────────────
+function IOSListRow({ title, detail, icon, chevron = true, isLast = false, dark = false }) {
+  const text = dark ? '#fff' : '#000';
+  const sec = dark ? 'rgba(235,235,245,0.6)' : 'rgba(60,60,67,0.6)';
+  const ter = dark ? 'rgba(235,235,245,0.3)' : 'rgba(60,60,67,0.3)';
+  const sep = dark ? 'rgba(84,84,88,0.65)' : 'rgba(60,60,67,0.12)';
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', minHeight: 52,
+      padding: '0 16px', position: 'relative',
+      fontFamily: '-apple-system, system-ui', fontSize: 17,
+      letterSpacing: -0.43,
+    }}>
+      {icon && (
+        <div style={{
+          width: 30, height: 30, borderRadius: 7, background: icon,
+          marginRight: 12, flexShrink: 0,
+        }} />
+      )}
+      <div style={{ flex: 1, color: text }}>{title}</div>
+      {detail && <span style={{ color: sec, marginRight: 6 }}>{detail}</span>}
+      {chevron && (
+        <svg width="8" height="14" viewBox="0 0 8 14" style={{ flexShrink: 0 }}>
+          <path d="M1 1l6 6-6 6" stroke={ter} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      )}
+      {!isLast && (
+        <div style={{
+          position: 'absolute', bottom: 0, right: 0,
+          left: icon ? 58 : 16, height: 0.5, background: sep,
+        }} />
+      )}
+    </div>
+  );
+}
+
+function IOSList({ header, children, dark = false }) {
+  const hc = dark ? 'rgba(235,235,245,0.6)' : 'rgba(60,60,67,0.6)';
+  const bg = dark ? '#1C1C1E' : '#fff';
+  return (
+    <div>
+      {header && (
+        <div style={{
+          fontFamily: '-apple-system, system-ui', fontSize: 13,
+          color: hc, textTransform: 'uppercase',
+          padding: '8px 36px 6px', letterSpacing: -0.08,
+        }}>{header}</div>
+      )}
+      <div style={{
+        background: bg, borderRadius: 26,
+        margin: '0 16px', overflow: 'hidden',
+      }}>{children}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Device frame
+// ─────────────────────────────────────────────────────────────
+function IOSDevice({
+  children, width = 402, height = 874, dark = false,
+  title, keyboard = false,
+}) {
+  return (
+    <div style={{
+      width, height, borderRadius: 48, overflow: 'hidden',
+      position: 'relative', background: dark ? '#000' : '#F2F2F7',
+      boxShadow: '0 40px 80px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.12)',
+      fontFamily: '-apple-system, system-ui, sans-serif',
+      WebkitFontSmoothing: 'antialiased',
+    }}>
+      {/* dynamic island */}
+      <div style={{
+        position: 'absolute', top: 11, left: '50%', transform: 'translateX(-50%)',
+        width: 126, height: 37, borderRadius: 24, background: '#000', zIndex: 50,
+      }} />
+      {/* status bar (absolute) */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 }}>
+        <IOSStatusBar dark={dark} />
+      </div>
+      {/* nav + content */}
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        {title !== undefined && <IOSNavBar title={title} dark={dark} />}
+        <div style={{ flex: 1, overflow: 'auto' }}>{children}</div>
+        {keyboard && <IOSKeyboard dark={dark} />}
+      </div>
+      {/* home indicator — always on top */}
+      <div style={{
+        position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 60,
+        height: 34, display: 'flex', justifyContent: 'center', alignItems: 'flex-end',
+        paddingBottom: 8, pointerEvents: 'none',
+      }}>
+        <div style={{
+          width: 139, height: 5, borderRadius: 100,
+          background: dark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.25)',
+        }} />
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Keyboard — iOS 26 liquid glass
+// ─────────────────────────────────────────────────────────────
+function IOSKeyboard({ dark = false }) {
+  const glyph = dark ? 'rgba(255,255,255,0.7)' : '#595959';
+  const sugg = dark ? 'rgba(255,255,255,0.6)' : '#333';
+  const keyBg = dark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.85)';
+
+  // special-key icons
+  const icons = {
+    shift: <svg width="19" height="17" viewBox="0 0 19 17"><path d="M9.5 1L1 9.5h4.5V16h8V9.5H18L9.5 1z" fill={glyph}/></svg>,
+    del: <svg width="23" height="17" viewBox="0 0 23 17"><path d="M7 1h13a2 2 0 012 2v11a2 2 0 01-2 2H7l-6-7.5L7 1z" fill="none" stroke={glyph} strokeWidth="1.6" strokeLinejoin="round"/><path d="M10 5l7 7M17 5l-7 7" stroke={glyph} strokeWidth="1.6" strokeLinecap="round"/></svg>,
+    ret: <svg width="20" height="14" viewBox="0 0 20 14"><path d="M18 1v6H4m0 0l4-4M4 7l4 4" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  };
+
+  const key = (content, { w, flex, ret, fs = 25, k } = {}) => (
+    <div key={k} style={{
+      height: 42, borderRadius: 8.5,
+      flex: flex ? 1 : undefined, width: w, minWidth: 0,
+      background: ret ? '#08f' : keyBg,
+      boxShadow: '0 1px 0 rgba(0,0,0,0.075)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontFamily: '-apple-system, "SF Compact", system-ui',
+      fontSize: fs, fontWeight: 458, color: ret ? '#fff' : glyph,
+    }}>{content}</div>
+  );
+
+  const row = (keys, pad = 0) => (
+    <div style={{ display: 'flex', gap: 6.5, justifyContent: 'center', padding: `0 ${pad}px` }}>
+      {keys.map(l => key(l, { flex: true, k: l }))}
+    </div>
+  );
+
+  return (
+    <div style={{
+      position: 'relative', zIndex: 15, borderRadius: 27, overflow: 'hidden',
+      padding: '11px 0 2px',
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      boxShadow: dark
+        ? '0 -2px 20px rgba(0,0,0,0.09)'
+        : '0 -1px 6px rgba(0,0,0,0.018), 0 -3px 20px rgba(0,0,0,0.012)',
+    }}>
+      {/* liquid glass bg — same recipe as nav pills */}
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 27,
+        backdropFilter: 'blur(12px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(12px) saturate(180%)',
+        background: dark ? 'rgba(120,120,128,0.14)' : 'rgba(255,255,255,0.25)',
+      }} />
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 27,
+        boxShadow: dark
+          ? 'inset 1.5px 1.5px 1px rgba(255,255,255,0.15)'
+          : 'inset 1.5px 1.5px 1px rgba(255,255,255,0.7), inset -1px -1px 1px rgba(255,255,255,0.4)',
+        border: dark ? '0.5px solid rgba(255,255,255,0.15)' : '0.5px solid rgba(0,0,0,0.06)',
+        pointerEvents: 'none',
+      }} />
+
+      {/* autocorrect bar */}
+      <div style={{
+        display: 'flex', gap: 20, alignItems: 'center',
+        padding: '8px 22px 13px', width: '100%', boxSizing: 'border-box',
+        position: 'relative',
+      }}>
+        {['"The"', 'the', 'to'].map((w, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <div style={{ width: 1, height: 25, background: '#ccc', opacity: 0.3 }} />}
+            <div style={{
+              flex: 1, textAlign: 'center',
+              fontFamily: '-apple-system, system-ui', fontSize: 17,
+              color: sugg, letterSpacing: -0.43, lineHeight: '22px',
+            }}>{w}</div>
+          </React.Fragment>
+        ))}
+      </div>
+
+      {/* key layout */}
+      <div style={{
+        display: 'flex', flexDirection: 'column', gap: 13,
+        padding: '0 6.5px', width: '100%', boxSizing: 'border-box',
+        position: 'relative',
+      }}>
+        {row(['q','w','e','r','t','y','u','i','o','p'])}
+        {row(['a','s','d','f','g','h','j','k','l'], 20)}
+        <div style={{ display: 'flex', gap: 14.25, alignItems: 'center' }}>
+          {key(icons.shift, { w: 45, k: 'shift' })}
+          <div style={{ display: 'flex', gap: 6.5, flex: 1 }}>
+            {['z','x','c','v','b','n','m'].map(l => key(l, { flex: true, k: l }))}
+          </div>
+          {key(icons.del, { w: 45, k: 'del' })}
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {key('ABC', { w: 92.25, fs: 18, k: 'abc' })}
+          {key('', { flex: true, k: 'space' })}
+          {key(icons.ret, { w: 92.25, ret: true, k: 'ret' })}
+        </div>
+      </div>
+
+      {/* bottom spacer (emoji+mic area, icons omitted) */}
+      <div style={{ height: 56, width: '100%', position: 'relative' }} />
+    </div>
+  );
+}
+
+Object.assign(window, {
+  IOSDevice, IOSStatusBar, IOSNavBar, IOSGlassPill, IOSList, IOSListRow, IOSKeyboard,
+});
+
+</script>
+<script type="text/babel">
+const { useState, useEffect, useRef, createContext, useContext } = React;
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+const initials = n => (n||'?').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+const timeStr = d => d.toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
+
+// ─── Mock Data ─────────────────────────────────────────────────────────────
+const USERS = [
+  {id:'alice',username:'alice',name:'Алиса Петрова',color:'#5b8dee',online:true},
+  {id:'bob',  username:'bob',  name:'Боб Смирнов',  color:'#ee5b8d',online:false},
+  {id:'carol',username:'carol',name:'Карол Иванова',color:'#5beeca',online:true},
+  {id:'dan',  username:'dan',  name:'Даниил Козлов',color:'#eec15b',online:false},
+  {id:'eva',  username:'eva',  name:'Ева Белова',   color:'#c45bee',online:true},
+];
+const NOW=new Date(), mins=m=>new Date(NOW-m*60000);
+const INIT_MSGS = {
+  alice:[
+    {id:1,from:'alice',text:'Привет! Как дела?',ts:mins(60)},
+    {id:2,from:'me',text:'Всё отлично, спасибо!',ts:mins(58)},
+    {id:3,from:'alice',text:'Отправил файлы по проекту.',ts:mins(30)},
+    {id:4,from:'me',text:'Принял, изучаю 👍',ts:mins(28)},
+    {id:5,from:'alice',text:'Жду фидбек до вечера 🙂',ts:mins(5)},
+  ],
+  bob:[{id:1,from:'bob',text:'Встреча в 15:00?',ts:mins(120)},{id:2,from:'me',text:'Ок, буду',ts:mins(118)}],
+  carol:[{id:1,from:'carol',text:'Посмотри дашборд',ts:mins(200)},{id:2,from:'me',text:'Классно!',ts:mins(195)},{id:3,from:'carol',text:'Хочу добавить анимации',ts:mins(10)}],
+  'group-1':[
+    {id:1,from:'alice',text:'Всем привет!',ts:mins(300)},
+    {id:2,from:'bob',text:'Привет команда',ts:mins(295)},
+    {id:3,from:'me',text:'Доброе утро!',ts:mins(290)},
+    {id:4,from:'carol',text:'Сегодня созвон в 14:00',ts:mins(15)},
+  ],
+  'group-2':[
+    {id:1,from:'dan',text:'Ребята, когда сдаём макеты?',ts:mins(500)},
+    {id:2,from:'eva',text:'В пятницу',ts:mins(490)},
+    {id:3,from:'me',text:'Согласен',ts:mins(485)},
+    {id:4,from:'eva',text:'Почти закончила анимации 🎉',ts:mins(8)},
+  ],
+};
+const INIT_CONVS = [
+  {id:'alice',type:'dm',peer:USERS[0],lastMsg:'Жду фидбек до вечера',lastTs:mins(5),unread:1},
+  {id:'group-1',type:'group',name:'Команда дизайна',members:USERS.slice(0,3),lastMsg:'Сегодня созвон в 14:00',lastTs:mins(15),unread:3},
+  {id:'group-2',type:'group',name:'Макеты / Q2',members:[USERS[3],USERS[4],USERS[0]],lastMsg:'Почти закончила анимации 🎉',lastTs:mins(8),unread:1},
+  {id:'bob',type:'dm',peer:USERS[1],lastMsg:'Ок, буду',lastTs:mins(118),unread:0},
+  {id:'carol',type:'dm',peer:USERS[2],lastMsg:'Хочу добавить анимации',lastTs:mins(10),unread:2},
+  {id:'dan',type:'dm',peer:USERS[3],lastMsg:'Спасибо!',lastTs:mins(2000),unread:0},
+];
+
+// ─── Icons ─────────────────────────────────────────────────────────────────
+const Ic = ({d,size=20,color='currentColor',sw=1.8,style={}}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" style={style}>
+    {Array.isArray(d)?d.map((p,i)=><path key={i} d={p}/>):<path d={d}/>}
+  </svg>
+);
+const icons = {
+  search:"M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z",
+  send:"M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z",
+  edit:"M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z",
+  logout:"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
+  plus:"M12 5v14M5 12h14",
+  close:"M18 6L6 18M6 6l12 12",
+  check:"M20 6L9 17l-5-5",
+  settings:"M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
+  sun:"M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z",
+  moon:"M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z",
+  user:"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+  back:"M19 12H5M12 19l-7-7 7-7",
+  pen:"M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z",
+  camera:"M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+  more:"M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2zM19 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2zM5 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
+  emoji:"M9 10h.01M15 10h.01M8 14s1.5 2 4 2 4-2 4-2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z",
+  paperclip:"M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48",
+  group:"M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
+};
+
+// ─── Avatar ────────────────────────────────────────────────────────────────
+function Avatar({name,color,size=44,online}) {
+  return (
+    <div style={{position:'relative',flexShrink:0}}>
+      <div style={{width:size,height:size,borderRadius:'50%',background:color||'var(--accent)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:size*0.38,fontWeight:600,color:'#fff',letterSpacing:'-0.02em',userSelect:'none'}}>{initials(name)}</div>
+      {online&&<div style={{position:'absolute',bottom:1,right:1,width:size*0.26,height:size*0.26,borderRadius:'50%',background:'var(--online)',border:'2.5px solid var(--panel)'}}/>}
+    </div>
+  );
+}
+
+// ─── Double check ──────────────────────────────────────────────────────────
+function DoubleCheck({read}) {
+  const c = read ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.5)';
+  return (
+    <svg width="18" height="11" viewBox="0 0 20 12" fill="none" style={{flexShrink:0,marginLeft:2}}>
+      <polyline points="1,6 5,10 12,2" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+      <polyline points="8,10 15,2" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+    </svg>
+  );
+}
+
+// ─── App Router / State Container ──────────────────────────────────────────
+function App() {
+  const [screen,setScreen]=useState(()=>localStorage.getItem('mmsg_loggedIn')==='1'?'chats':'auth');
+  const [stack,setStack]=useState([]); // e.g. [{name:'chat',convId:'alice'}]
+  const [convs,setConvs]=useState(INIT_CONVS);
+  const [msgs,setMsgs]=useState(INIT_MSGS);
+  const [currentUser,setCurrentUser]=useState(()=>{
+    try{return JSON.parse(localStorage.getItem('mmsg_user'))||{id:'me',username:'you',name:'Вы',color:'#7c6fff'};}
+    catch{return{id:'me',username:'you',name:'Вы',color:'#7c6fff'};}
+  });
+  const [theme,setTheme]=useState(()=>localStorage.getItem('mmsg_theme')||'dark');
+  const [sheet,setSheet]=useState(null); // {kind, ...}
+
+  useEffect(()=>{document.documentElement.classList.toggle('light',theme==='light');localStorage.setItem('mmsg_theme',theme);},[theme]);
+
+  const login=u=>{setCurrentUser(u);localStorage.setItem('mmsg_loggedIn','1');localStorage.setItem('mmsg_user',JSON.stringify(u));setScreen('chats');};
+  const logout=()=>{localStorage.removeItem('mmsg_loggedIn');setScreen('auth');setStack([]);};
+  const saveUser=u=>{setCurrentUser(u);localStorage.setItem('mmsg_user',JSON.stringify(u));};
+
+  const push=s=>setStack(p=>[...p,s]);
+  const pop=()=>setStack(p=>p.slice(0,-1));
+  const popTo=n=>setStack(p=>p.slice(0,n));
+
+  const openChat=convId=>{
+    // if already in chat view, replace instead of stacking
+    setStack(p=>{
+      const last=p[p.length-1];
+      if(last&&last.name==='chat') return [...p.slice(0,-1),{name:'chat',convId}];
+      return [...p,{name:'chat',convId}];
+    });
+    setSheet(null);
+  };
+
+  const sendMsg=(convId,text)=>{
+    const id=Date.now();
+    const m={id,from:'me',text,ts:new Date()};
+    setMsgs(p=>({...p,[convId]:[...(p[convId]||[]),m]}));
+    setConvs(p=>p.map(c=>c.id===convId?{...c,lastMsg:text,lastTs:new Date()}:c));
+  };
+
+  const ctx = {convs,msgs,currentUser,theme,setTheme,logout,saveUser,push,pop,popTo,openChat,sendMsg,setSheet};
+
+  return (
+    <AppCtx.Provider value={ctx}>
+      <IOSDevice width={402} height={874} dark={theme==='dark'}>
+        <div style={{width:'100%',height:'100%',background:'var(--bg)',color:'var(--text)',position:'relative',overflow:'hidden'}}>
+          {screen==='auth' && <AuthScreen onLogin={login}/>}
+          {screen==='chats' && <>
+            <ChatsList/>
+            {stack.map((s,i)=>(
+              <div key={i} className="scr" style={{position:'absolute',top:0,left:0,right:0,bottom:0,background:'transparent',zIndex:10+i}}>
+                <div style={{position:'absolute',top:54,left:0,right:0,bottom:0,background:'var(--bg)'}}/>
+                <div style={{position:'relative',width:'100%',height:'100%'}}>
+                {s.name==='chat' && <ChatScreen convId={s.convId}/>}
+                {s.name==='peer' && <PeerScreen peer={s.peer} members={s.members} isGroup={s.isGroup}/>}
+                {s.name==='self' && <SelfScreen/>}
+                {s.name==='settings' && <SettingsScreen/>}
+                {s.name==='new' && <NewChatScreen/>}
+                {s.name==='newGroup' && <NewGroupScreen/>}
+                </div>
+              </div>
+            ))}
+          </>}
+          {sheet && <Sheet {...sheet}/>}
+        </div>
+      </IOSDevice>
+    </AppCtx.Provider>
+  );
+}
+const AppCtx = createContext();
+const useApp = () => useContext(AppCtx);
+
+// ─── Screen chrome: Header ─────────────────────────────────────────────────
+function TopBar({title,left,right,subtitle,onTitleClick}) {
+  return (
+    <>
+    {/* Spacer for iOS status bar (transparent so 9:41 + icons show through) */}
+    <div style={{height:54,flexShrink:0}}/>
+    <div style={{
+      position:'relative',paddingTop:6,paddingBottom:10,
+      background:'var(--panel)',borderBottom:'1px solid var(--divider)',
+      display:'flex',alignItems:'center',gap:8,paddingLeft:6,paddingRight:12,flexShrink:0,
+    }}>
+      <div style={{width:44,flexShrink:0,display:'flex',justifyContent:'flex-start'}}>{left}</div>
+      <div onClick={onTitleClick} style={{flex:1,minWidth:0,textAlign:'center',cursor:onTitleClick?'pointer':'default'}}>
+        <div style={{fontSize:16,fontWeight:600,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{title}</div>
+        {subtitle&&<div style={{fontSize:12,color:'var(--text-muted)',marginTop:1}}>{subtitle}</div>}
+      </div>
+      <div style={{display:'flex',gap:4,flexShrink:0,justifyContent:'flex-end',minWidth:44}}>{right}</div>
+    </div>
+    </>
+  );
+}
+const HeaderBtn = ({icon,onClick,label,tint}) => (
+  <button onClick={onClick} style={{background:'none',border:'none',cursor:'pointer',color:tint||'var(--accent)',padding:'6px 10px',display:'flex',alignItems:'center',gap:4,fontSize:15,fontWeight:label?500:400}}>
+    {icon&&<Ic d={icon} size={22}/>}
+    {label}
+  </button>
+);
+
+// ─── Auth screen ───────────────────────────────────────────────────────────
+function AuthScreen({onLogin}) {
+  const [tab,setTab]=useState('login');
+  const [form,setForm]=useState({username:'',password:'',firstName:'',lastName:'',passwordRepeat:''});
+  const [error,setError]=useState('');
+  const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
+  const submit=()=>{
+    if(!form.username||!form.password){setError('Заполните все поля');return;}
+    if(tab==='register'){
+      if(!form.firstName){setError('Введите имя');return;}
+      if(form.password!==form.passwordRepeat){setError('Пароли не совпадают');return;}
+    }
+    const name=tab==='register'?`${form.firstName} ${form.lastName}`.trim():form.username;
+    onLogin({id:'me',username:form.username,name,color:'#7c6fff'});
+  };
+  return (
+    <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',padding:'90px 28px 40px',background:'var(--bg)'}}>
+      <div style={{textAlign:'center',marginBottom:40}}>
+        <div style={{width:72,height:72,margin:'0 auto 18px',borderRadius:20,background:'linear-gradient(135deg,#7c6fff,#9380ff)',display:'flex',alignItems:'center',justifyContent:'center',boxShadow:'0 10px 30px rgba(124,111,255,0.4)'}}>
+          <Ic d={icons.send} size={32} color="#fff" sw={2}/>
+        </div>
+        <div style={{fontSize:26,fontWeight:700,color:'var(--text)',letterSpacing:'-0.02em'}}>Messenger</div>
+        <div style={{fontSize:14,color:'var(--text-muted)',marginTop:6}}>Быстрый и безопасный</div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',background:'var(--input-bg)',borderRadius:12,padding:4,marginBottom:22}}>
+        {['login','register'].map(t=>(
+          <button key={t} onClick={()=>{setTab(t);setError('');}} style={{border:'none',cursor:'pointer',borderRadius:9,padding:'10px 0',fontWeight:500,fontSize:14,background:tab===t?'var(--accent)':'transparent',color:tab===t?'#fff':'var(--text-muted)',transition:'all .2s'}}>
+            {t==='login'?'Вход':'Регистрация'}
+          </button>
+        ))}
+      </div>
+      <div style={{display:'grid',gap:12}}>
+        {tab==='register'&&<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+          <Field placeholder="Имя" value={form.firstName} onChange={set('firstName')}/>
+          <Field placeholder="Фамилия" value={form.lastName} onChange={set('lastName')}/>
+        </div>}
+        <Field placeholder="Никнейм" value={form.username} onChange={set('username')}/>
+        <Field placeholder="Пароль" type="password" value={form.password} onChange={set('password')}/>
+        {tab==='register'&&<Field placeholder="Повторите пароль" type="password" value={form.passwordRepeat} onChange={set('passwordRepeat')}/>}
+        {error&&<div style={{fontSize:13,color:'var(--danger)',textAlign:'center'}}>{error}</div>}
+        <button onClick={submit} style={{marginTop:6,background:'var(--accent)',color:'#fff',border:'none',borderRadius:12,padding:'14px',fontSize:15,fontWeight:600,cursor:'pointer',boxShadow:'0 6px 18px rgba(124,111,255,0.35)'}}>
+          {tab==='login'?'Войти':'Создать аккаунт'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const Field = ({style={},...p}) => (
+  <input {...p} style={{background:'var(--input-bg)',border:'1px solid var(--divider)',borderRadius:12,padding:'13px 14px',fontSize:15,color:'var(--text)',width:'100%',...style}}/>
+);
+
+// ─── Chats List ────────────────────────────────────────────────────────────
+function ChatsList() {
+  const {convs,currentUser,push,setSheet}=useApp();
+  const [search,setSearch]=useState('');
+  const filtered=convs.filter(c=>{
+    const name=c.type==='group'?c.name:c.peer.name;
+    return name.toLowerCase().includes(search.toLowerCase());
+  });
+  return (
+    <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',background:'var(--bg)'}}>
+      <TopBar
+        title="Чаты"
+        left={<HeaderBtn icon={icons.settings} onClick={()=>push({name:'settings'})}/>}
+        right={<HeaderBtn icon={icons.edit} onClick={()=>setSheet({kind:'newChatOptions'})}/>}
+      />
+      {/* Search */}
+      <div style={{padding:'10px 14px 6px',background:'var(--panel)',borderBottom:'1px solid var(--divider)'}}>
+        <div style={{background:'var(--input-bg)',borderRadius:10,display:'flex',alignItems:'center',gap:8,padding:'8px 12px'}}>
+          <Ic d={icons.search} size={16} color="var(--text-muted)"/>
+          <input placeholder="Поиск" value={search} onChange={e=>setSearch(e.target.value)} style={{background:'none',border:'none',flex:1,color:'var(--text)',fontSize:14}}/>
+        </div>
+      </div>
+      {/* Profile card */}
+      <div onClick={()=>push({name:'self'})} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 16px',background:'var(--panel)',borderBottom:'1px solid var(--divider)',cursor:'pointer'}}>
+        <Avatar name={currentUser.name} color={currentUser.color} size={40} online/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:14,fontWeight:600,color:'var(--text)'}}>{currentUser.name}</div>
+          <div style={{fontSize:12,color:'var(--text-muted)'}}>@{currentUser.username} · в сети</div>
+        </div>
+        <Ic d="M9 18l6-6-6-6" size={18} color="var(--text-muted)"/>
+      </div>
+      {/* List */}
+      <div style={{flex:1,overflowY:'auto'}}>
+        {filtered.map((c,i)=>{
+          const isGroup=c.type==='group';
+          const name=isGroup?c.name:c.peer.name;
+          const color=isGroup?'#5b8dee':c.peer.color;
+          const online=!isGroup&&c.peer.online;
+          return (
+            <ConvRow key={c.id} i={i} c={c} name={name} color={color} online={online} isGroup={isGroup}/>
+          );
+        })}
+        {filtered.length===0&&<div style={{textAlign:'center',color:'var(--text-muted)',padding:40,fontSize:14}}>Ничего не найдено</div>}
+      </div>
+    </div>
+  );
+}
+
+function ConvRow({c,i,name,color,online,isGroup}) {
+  const {openChat}=useApp();
+  const [pressed,setPressed]=useState(false);
+  return (
+    <div
+      onClick={()=>openChat(c.id)}
+      onTouchStart={()=>setPressed(true)} onTouchEnd={()=>setPressed(false)}
+      onMouseDown={()=>setPressed(true)} onMouseUp={()=>setPressed(false)} onMouseLeave={()=>setPressed(false)}
+      className="conv-enter"
+      style={{
+        display:'flex',alignItems:'center',gap:12,padding:'12px 16px',
+        background:pressed?'var(--panel-hover)':'transparent',
+        borderBottom:'1px solid var(--divider)',cursor:'pointer',
+        animationDelay:`${i*30}ms`,transition:'background .12s',
+      }}>
+      <Avatar name={name} color={color} size={48} online={online}/>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8}}>
+          <div style={{fontSize:15,fontWeight:600,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{name}</div>
+          <div style={{fontSize:11,color:'var(--text-muted)',flexShrink:0}}>{timeStr(c.lastTs)}</div>
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginTop:3}}>
+          <div style={{fontSize:13,color:'var(--text-muted)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',flex:1}}>{c.lastMsg}</div>
+          {c.unread>0&&<div style={{background:'var(--accent)',color:'#fff',fontSize:11,fontWeight:600,minWidth:20,height:20,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 6px',flexShrink:0}}>{c.unread}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Chat Screen ───────────────────────────────────────────────────────────
+function ChatScreen({convId}) {
+  const {convs,msgs,currentUser,sendMsg,pop,push}=useApp();
+  const conv=convs.find(c=>c.id===convId);
+  const [text,setText]=useState('');
+  const [newIds,setNewIds]=useState(new Set());
+  const scrollRef=useRef();
+
+  useEffect(()=>{if(scrollRef.current)scrollRef.current.scrollTop=scrollRef.current.scrollHeight;},[msgs[convId]]);
+  if(!conv) return null;
+  const isGroup=conv.type==='group';
+  const name=isGroup?conv.name:conv.peer.name;
+  const color=isGroup?'#5b8dee':conv.peer.color;
+  const online=!isGroup&&conv.peer.online;
+  const subtitle=isGroup?`${conv.members.length} участника`:(online?'в сети':'не в сети');
+  const convMsgs=msgs[convId]||[];
+
+  const send=()=>{
+    if(!text.trim())return;
+    const id=Date.now();
+    sendMsg(convId,text.trim());
+    setNewIds(p=>new Set([...p,id]));
+    setText('');
+  };
+
+  const openPeer=()=>push({name:'peer',peer:isGroup?name:conv.peer,isGroup,members:isGroup?conv.members:[]});
+
+  return (
+    <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',background:'var(--chat-bg)'}}>
+      <TopBar
+        title={<div style={{display:'flex',alignItems:'center',gap:10,justifyContent:'center'}}>
+          <Avatar name={name} color={color} size={32} online={online}/>
+          <div style={{textAlign:'left'}}>
+            <div style={{fontSize:15,fontWeight:600}}>{name}</div>
+            <div style={{fontSize:11,color:online?'var(--online)':'var(--text-muted)'}}>{subtitle}</div>
+          </div>
+        </div>}
+        left={<HeaderBtn icon={icons.back} onClick={pop}/>}
+        right={<HeaderBtn icon={icons.user} onClick={openPeer}/>}
+        onTitleClick={openPeer}
+      />
+      {/* Messages */}
+      <div ref={scrollRef} style={{flex:1,overflowY:'auto',padding:'14px 12px',display:'flex',flexDirection:'column',gap:4}}>
+        {convMsgs.map((m,i)=>{
+          const isMe=m.from==='me';
+          const sender=isMe?currentUser:(USERS.find(u=>u.id===m.from)||{name:m.from,color:'#888'});
+          const prev=convMsgs[i-1];
+          const showSender=isGroup&&!isMe&&(!prev||prev.from!==m.from);
+          const isNew=newIds.has(m.id);
+          const isRead=i<convMsgs.length-1;
+          return (
+            <div key={m.id} className={isNew?(isMe?'msg-me':'msg-other'):''} style={{display:'flex',flexDirection:isMe?'row-reverse':'row',gap:6,alignItems:'flex-end',marginBottom:2}}>
+              {!isMe&&<div style={{width:26,flexShrink:0}}>{(!convMsgs[i+1]||convMsgs[i+1].from!==m.from)&&<Avatar name={sender.name} color={sender.color} size={26}/>}</div>}
+              <div style={{maxWidth:'72%'}}>
+                {showSender&&<div style={{fontSize:11,color:sender.color,fontWeight:500,marginBottom:2,marginLeft:6}}>{sender.name}</div>}
+                <div style={{
+                  background:isMe?'var(--bubble-me)':'var(--bubble)',
+                  color:isMe?'#fff':'var(--text)',
+                  padding:'8px 12px',borderRadius:16,
+                  borderBottomRightRadius:isMe?4:16,
+                  borderBottomLeftRadius:!isMe?4:16,
+                  fontSize:14,lineHeight:1.45,
+                  boxShadow:'0 1px 2px rgba(0,0,0,0.08)',
+                }}>
+                  {m.text}
+                  <div style={{fontSize:10,color:isMe?'rgba(255,255,255,0.7)':'var(--text-muted)',textAlign:'right',marginTop:2,display:'flex',alignItems:'center',justifyContent:'flex-end',gap:3}}>
+                    {timeStr(m.ts)}{isMe&&<DoubleCheck read={isRead}/>}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {/* Input */}
+      <div style={{padding:'8px 10px 28px',background:'var(--panel)',borderTop:'1px solid var(--divider)',display:'flex',alignItems:'flex-end',gap:8}}>
+        <button style={{background:'none',border:'none',color:'var(--text-muted)',padding:8,cursor:'pointer'}}>
+          <Ic d={icons.paperclip} size={22}/>
+        </button>
+        <div style={{flex:1,background:'var(--input-bg)',borderRadius:20,padding:'9px 14px',display:'flex',alignItems:'center',gap:8,minHeight:40}}>
+          <input
+            value={text} onChange={e=>setText(e.target.value)}
+            onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();send();}}}
+            placeholder="Сообщение…"
+            style={{flex:1,background:'none',border:'none',color:'var(--text)',fontSize:15}}/>
+          <Ic d={icons.emoji} size={20} color="var(--text-muted)"/>
+        </div>
+        <button onClick={send} disabled={!text.trim()} style={{
+          background:text.trim()?'var(--accent)':'var(--input-bg)',border:'none',
+          borderRadius:'50%',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center',
+          cursor:text.trim()?'pointer':'default',color:text.trim()?'#fff':'var(--text-muted)',
+          transition:'all .15s',
+        }}>
+          <Ic d={icons.send} size={18}/>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Peer / Group Profile Screen ───────────────────────────────────────────
+function PeerScreen({peer,isGroup,members}) {
+  const {pop,openChat,push,setSheet}=useApp();
+  const name=isGroup?peer:peer.name;
+  const color=isGroup?'#5b8dee':peer.color;
+  return (
+    <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',background:'var(--bg)'}}>
+      <TopBar title={isGroup?'Группа':'Профиль'} left={<HeaderBtn icon={icons.back} onClick={pop}/>}/>
+      <div style={{flex:1,overflowY:'auto'}}>
+        {/* Hero */}
+        <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:12,padding:'24px 20px',background:'var(--panel)',borderBottom:'1px solid var(--divider)'}}>
+          <Avatar name={name} color={color} size={92} online={!isGroup&&peer.online}/>
+          <div style={{textAlign:'center'}}>
+            <div style={{fontSize:20,fontWeight:700,color:'var(--text)'}}>{name}</div>
+            {!isGroup&&<div style={{fontSize:13,color:'var(--text-muted)',marginTop:3}}>@{peer.username}</div>}
+            <div style={{marginTop:8,display:'inline-flex',alignItems:'center',gap:6,background:(!isGroup&&peer.online)?'rgba(59,232,160,0.12)':'var(--input-bg)',borderRadius:20,padding:'4px 12px',fontSize:12,color:(!isGroup&&peer.online)?'var(--online)':'var(--text-muted)'}}>
+              {!isGroup&&<div style={{width:7,height:7,borderRadius:'50%',background:peer.online?'var(--online)':'var(--text-muted)'}}/>}
+              {isGroup?`${members.length} участника`:(peer.online?'в сети':'не в сети')}
+            </div>
+          </div>
+          {!isGroup&&(
+            <button onClick={()=>openChat(peer.id)} style={{marginTop:8,background:'var(--accent)',color:'#fff',border:'none',borderRadius:12,padding:'12px 20px',fontSize:14,fontWeight:600,cursor:'pointer',display:'flex',alignItems:'center',gap:8,boxShadow:'0 4px 14px rgba(124,111,255,0.3)'}}>
+              <Ic d={icons.send} size={16}/> Написать сообщение
+            </button>
+          )}
+        </div>
+        {/* Group members */}
+        {isGroup&&(
+          <div style={{marginTop:14}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'0 16px 10px'}}>
+              <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'.07em',fontWeight:600}}>Участники</div>
+              <button onClick={()=>setSheet({kind:'addMembers',existingIds:members.map(m=>m.id)})} style={{background:'var(--panel)',border:'1px solid var(--divider)',color:'var(--accent)',borderRadius:8,padding:'5px 12px',fontSize:13,fontWeight:500,cursor:'pointer',display:'flex',alignItems:'center',gap:4}}>
+                <Ic d={icons.plus} size={14}/> Добавить
+              </button>
+            </div>
+            <div style={{background:'var(--panel)',borderTop:'1px solid var(--divider)',borderBottom:'1px solid var(--divider)'}}>
+              {members.map((m,i)=>(
+                <div key={m.id} onClick={()=>push({name:'peer',peer:m,isGroup:false,members:[]})} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 16px',borderBottom:i<members.length-1?'1px solid var(--divider)':'none',cursor:'pointer'}}>
+                  <Avatar name={m.name} color={m.color} size={42} online={m.online}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:14,fontWeight:500,color:'var(--text)',display:'flex',alignItems:'center',gap:6}}>
+                      {m.name}
+                      {i===0&&<span style={{fontSize:10,fontWeight:600,color:'var(--accent)',background:'rgba(124,111,255,0.15)',borderRadius:6,padding:'1px 6px'}}>Админ</span>}
+                    </div>
+                    <div style={{fontSize:12,color:m.online?'var(--online)':'var(--text-muted)'}}>{m.online?'в сети':'@'+m.username}</div>
+                  </div>
+                  <Ic d="M9 18l6-6-6-6" size={16} color="var(--text-muted)"/>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Self Profile Screen ───────────────────────────────────────────────────
+function SelfScreen() {
+  const {currentUser,saveUser,pop}=useApp();
+  const [editing,setEditing]=useState(false);
+  const [form,setForm]=useState({
+    firstName:(currentUser.name||'').split(' ')[0]||'',
+    lastName:(currentUser.name||'').split(' ').slice(1).join(' ')||'',
+    username:currentUser.username||'',
+    color:currentUser.color||'#7c6fff',
+  });
+  const COLORS=['#7c6fff','#5b8dee','#ee5b8d','#5beeca','#eec15b','#c45bee','#ef4444','#10b981'];
+  const save=()=>{
+    saveUser({...currentUser,name:`${form.firstName} ${form.lastName}`.trim()||form.username,username:form.username,color:form.color});
+    setEditing(false);
+  };
+  return (
+    <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',background:'var(--bg)'}}>
+      <TopBar
+        title="Мой профиль"
+        left={<HeaderBtn icon={icons.back} onClick={pop}/>}
+        right={editing
+          ? <HeaderBtn label="Готово" onClick={save} tint="var(--accent)"/>
+          : <HeaderBtn label="Править" onClick={()=>setEditing(true)} tint="var(--accent)"/>}
+      />
+      <div style={{flex:1,overflowY:'auto'}}>
+        <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:14,padding:'24px 20px',background:'var(--panel)',borderBottom:'1px solid var(--divider)'}}>
+          <div style={{position:'relative'}}>
+            <Avatar name={`${form.firstName} ${form.lastName}`.trim()||form.username} color={form.color} size={96}/>
+            {editing&&<div style={{position:'absolute',bottom:0,right:0,width:32,height:32,borderRadius:'50%',background:'var(--accent)',border:'2px solid var(--panel)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <Ic d={icons.camera} size={15} color="#fff"/>
+            </div>}
+          </div>
+          {editing&&<div style={{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'center'}}>
+            {COLORS.map(c=>(
+              <div key={c} onClick={()=>setForm(f=>({...f,color:c}))} style={{width:26,height:26,borderRadius:'50%',background:c,cursor:'pointer',transform:form.color===c?'scale(1.25)':'scale(1)',boxShadow:form.color===c?`0 0 0 2px var(--panel),0 0 0 4px ${c}`:'none',transition:'transform .15s'}}/>
+            ))}
+          </div>}
+          {!editing&&<>
+            <div style={{textAlign:'center'}}>
+              <div style={{fontSize:22,fontWeight:700,color:'var(--text)'}}>{currentUser.name}</div>
+              <div style={{fontSize:14,color:'var(--text-muted)',marginTop:3}}>@{currentUser.username}</div>
+            </div>
+            <div style={{display:'inline-flex',alignItems:'center',gap:6,background:'rgba(59,232,160,0.12)',borderRadius:20,padding:'4px 12px',fontSize:12,color:'var(--online)'}}>
+              <div style={{width:7,height:7,borderRadius:'50%',background:'var(--online)'}}/>в сети
+            </div>
+          </>}
+        </div>
+        {editing&&<div style={{padding:'18px 16px',display:'grid',gap:12}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+            <Field placeholder="Имя" value={form.firstName} onChange={e=>setForm(f=>({...f,firstName:e.target.value}))}/>
+            <Field placeholder="Фамилия" value={form.lastName} onChange={e=>setForm(f=>({...f,lastName:e.target.value}))}/>
+          </div>
+          <Field placeholder="Никнейм" value={form.username} onChange={e=>setForm(f=>({...f,username:e.target.value}))}/>
+        </div>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Settings Screen ───────────────────────────────────────────────────────
+function SettingsScreen() {
+  const {theme,setTheme,pop,logout,currentUser}=useApp();
+  const [notif,setNotif]=useState(true);
+  const [sound,setSound]=useState(false);
+  const [accent,setAccent]=useState('#7c6fff');
+  useEffect(()=>{document.documentElement.style.setProperty('--accent',accent);},[accent]);
+  return (
+    <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',background:'var(--bg)'}}>
+      <TopBar title="Настройки" left={<HeaderBtn icon={icons.back} onClick={pop}/>}/>
+      <div style={{flex:1,overflowY:'auto',padding:'14px 0'}}>
+        {/* Theme card */}
+        <SettingsSection title="Внешний вид">
+          <div style={{padding:'14px 16px',display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            {['dark','light'].map(t=>(
+              <button key={t} onClick={()=>setTheme(t)} style={{border:`2px solid ${theme===t?'var(--accent)':'var(--divider)'}`,borderRadius:12,padding:'12px 10px',cursor:'pointer',background:theme===t?'rgba(124,111,255,0.08)':'var(--input-bg)',display:'flex',alignItems:'center',gap:8,transition:'all .15s'}}>
+                <Ic d={t==='dark'?icons.moon:icons.sun} size={18} color={theme===t?'var(--accent)':'var(--text-muted)'}/>
+                <div style={{textAlign:'left',flex:1}}>
+                  <div style={{fontSize:13,fontWeight:500,color:theme===t?'var(--accent)':'var(--text)'}}>{t==='dark'?'Тёмная':'Светлая'}</div>
+                </div>
+                {theme===t&&<div style={{width:18,height:18,borderRadius:'50%',background:'var(--accent)',display:'flex',alignItems:'center',justifyContent:'center'}}><Ic d={icons.check} size={10} color="#fff"/></div>}
+              </button>
+            ))}
+          </div>
+          <div style={{padding:'0 16px 14px'}}>
+            <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:8}}>Акцентный цвет</div>
+            <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+              {['#7c6fff','#3b82f6','#10b981','#f59e0b','#ef4444','#ec4899'].map(c=>(
+                <div key={c} onClick={()=>setAccent(c)} style={{width:32,height:32,borderRadius:'50%',background:c,cursor:'pointer',transform:accent===c?'scale(1.15)':'scale(1)',boxShadow:accent===c?`0 0 0 3px var(--panel),0 0 0 5px ${c}`:'none',transition:'transform .15s'}}/>
+              ))}
+            </div>
+          </div>
+        </SettingsSection>
+        <SettingsSection title="Уведомления">
+          <Row label="Push-уведомления" right={<Toggle value={notif} onChange={setNotif}/>}/>
+          <Row label="Звуки сообщений" right={<Toggle value={sound} onChange={setSound}/>} last/>
+        </SettingsSection>
+        <SettingsSection title="Аккаунт">
+          <Row label={<span style={{color:'var(--danger)'}}>Выйти</span>} onClick={logout} right={<Ic d={icons.logout} size={18} color="var(--danger)"/>} last/>
+        </SettingsSection>
+        <div style={{textAlign:'center',color:'var(--text-muted)',fontSize:11,marginTop:16}}>Messenger v1.0 · @{currentUser.username}</div>
+      </div>
+    </div>
+  );
+}
+function SettingsSection({title,children}) {
+  return <div style={{marginBottom:18}}>
+    <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'.07em',fontWeight:600,padding:'0 16px 8px'}}>{title}</div>
+    <div style={{background:'var(--panel)',borderTop:'1px solid var(--divider)',borderBottom:'1px solid var(--divider)'}}>{children}</div>
+  </div>;
+}
+function Row({label,right,onClick,last}) {
+  return <div onClick={onClick} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px',borderBottom:last?'none':'1px solid var(--divider)',cursor:onClick?'pointer':'default',fontSize:15,color:'var(--text)'}}>
+    <div>{label}</div>{right}
+  </div>;
+}
+function Toggle({value,onChange}) {
+  return <div onClick={()=>onChange(!value)} style={{width:46,height:28,borderRadius:14,background:value?'var(--accent)':'var(--input-bg)',position:'relative',cursor:'pointer',transition:'background .2s'}}>
+    <div style={{position:'absolute',top:2,left:value?20:2,width:24,height:24,borderRadius:'50%',background:'#fff',boxShadow:'0 2px 4px rgba(0,0,0,0.2)',transition:'left .2s'}}/>
+  </div>;
+}
+
+// ─── New Chat (chooser) + New Group ────────────────────────────────────────
+function NewChatScreen() {
+  const {pop,openChat}=useApp();
+  const [search,setSearch]=useState('');
+  const list=USERS.filter(u=>u.name.toLowerCase().includes(search.toLowerCase())||u.username.includes(search.toLowerCase()));
+  return (
+    <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',background:'var(--bg)'}}>
+      <TopBar title="Новый чат" left={<HeaderBtn icon={icons.close} onClick={pop}/>}/>
+      <div style={{padding:'10px 14px',background:'var(--panel)',borderBottom:'1px solid var(--divider)'}}>
+        <div style={{background:'var(--input-bg)',borderRadius:10,display:'flex',alignItems:'center',gap:8,padding:'8px 12px'}}>
+          <Ic d={icons.search} size={16} color="var(--text-muted)"/>
+          <input autoFocus placeholder="Поиск пользователей" value={search} onChange={e=>setSearch(e.target.value)} style={{background:'none',border:'none',flex:1,color:'var(--text)',fontSize:14}}/>
+        </div>
+      </div>
+      <div style={{flex:1,overflowY:'auto'}}>
+        {list.map(u=>(
+          <div key={u.id} onClick={()=>{openChat(u.id);pop();}} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 16px',borderBottom:'1px solid var(--divider)',cursor:'pointer'}}>
+            <Avatar name={u.name} color={u.color} size={42} online={u.online}/>
+            <div style={{flex:1}}>
+              <div style={{fontSize:14,fontWeight:500,color:'var(--text)'}}>{u.name}</div>
+              <div style={{fontSize:12,color:'var(--text-muted)'}}>@{u.username}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NewGroupScreen() {
+  const {pop,convs}=useApp();
+  const [name,setName]=useState('');
+  const [search,setSearch]=useState('');
+  const [selected,setSelected]=useState([]);
+  const toggle=id=>setSelected(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
+  const recent=USERS.filter(u=>convs.some(c=>c.type==='dm'&&c.peer.id===u.id));
+  const results=search.length>=1?USERS.filter(u=>u.name.toLowerCase().includes(search.toLowerCase())||u.username.includes(search.toLowerCase())):recent;
+  return (
+    <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',background:'var(--bg)'}}>
+      <TopBar
+        title="Новая группа"
+        left={<HeaderBtn icon={icons.close} onClick={pop}/>}
+        right={<HeaderBtn label="Создать" onClick={()=>{if(name&&selected.length)pop();}} tint={name&&selected.length?'var(--accent)':'var(--text-muted)'}/>}
+      />
+      <div style={{padding:'16px',display:'grid',gap:12,borderBottom:'1px solid var(--divider)',background:'var(--panel)'}}>
+        <Field autoFocus placeholder="Название группы" value={name} onChange={e=>setName(e.target.value)}/>
+        {selected.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+          {selected.map(id=>{const u=USERS.find(x=>x.id===id);return u?(
+            <div key={id} onClick={()=>toggle(id)} style={{display:'flex',alignItems:'center',gap:5,background:`${u.color}22`,border:`1px solid ${u.color}44`,borderRadius:20,padding:'3px 10px 3px 6px',cursor:'pointer'}}>
+              <Avatar name={u.name} color={u.color} size={18}/>
+              <span style={{fontSize:12,color:'var(--text)',fontWeight:500}}>{u.name.split(' ')[0]}</span>
+              <Ic d={icons.close} size={10} color="var(--text-muted)"/>
+            </div>
+          ):null;})}
+        </div>}
+        <div style={{background:'var(--input-bg)',borderRadius:10,display:'flex',alignItems:'center',gap:8,padding:'8px 12px'}}>
+          <Ic d={icons.search} size={16} color="var(--text-muted)"/>
+          <input placeholder="Поиск пользователей" value={search} onChange={e=>setSearch(e.target.value)} style={{background:'none',border:'none',flex:1,color:'var(--text)',fontSize:14}}/>
+        </div>
+      </div>
+      <div style={{flex:1,overflowY:'auto'}}>
+        {search.length<1&&recent.length>0&&<div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'.07em',fontWeight:600,padding:'12px 16px 6px'}}>Недавние чаты</div>}
+        {results.map(u=>(
+          <div key={u.id} onClick={()=>toggle(u.id)} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 16px',borderBottom:'1px solid var(--divider)',cursor:'pointer',background:selected.includes(u.id)?'rgba(124,111,255,0.06)':'transparent'}}>
+            <Avatar name={u.name} color={u.color} size={42} online={u.online}/>
+            <div style={{flex:1}}>
+              <div style={{fontSize:14,fontWeight:500,color:'var(--text)'}}>{u.name}</div>
+              <div style={{fontSize:12,color:'var(--text-muted)'}}>@{u.username}</div>
+            </div>
+            <div style={{width:22,height:22,borderRadius:6,border:`2px solid ${selected.includes(u.id)?'var(--accent)':'var(--divider)'}`,background:selected.includes(u.id)?'var(--accent)':'transparent',display:'flex',alignItems:'center',justifyContent:'center'}}>
+              {selected.includes(u.id)&&<Ic d={icons.check} size={12} color="#fff"/>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Bottom Sheet ──────────────────────────────────────────────────────────
+function Sheet(props) {
+  const {setSheet,push}=useApp();
+  const close=()=>setSheet(null);
+  return (
+    <div className="sheet-overlay" onClick={close} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.5)',zIndex:100,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+      <div className="sheet" onClick={e=>e.stopPropagation()} style={{background:'var(--panel)',borderTopLeftRadius:20,borderTopRightRadius:20,paddingBottom:30,overflow:'hidden'}}>
+        <div style={{width:40,height:4,borderRadius:2,background:'var(--divider)',margin:'8px auto 12px'}}/>
+        {props.kind==='newChatOptions' && (
+          <div>
+            <SheetRow icon={icons.user} label="Новый чат" onClick={()=>{close();push({name:'new'});}}/>
+            <SheetRow icon={icons.group} label="Новая группа" onClick={()=>{close();push({name:'newGroup'});}}/>
+            <div style={{height:8,background:'var(--bg)'}}/>
+            <SheetRow label="Отмена" onClick={close} center/>
+          </div>
+        )}
+        {props.kind==='addMembers' && <AddMembersSheet existingIds={props.existingIds} onDone={close}/>}
+      </div>
+    </div>
+  );
+}
+function SheetRow({icon,label,onClick,center}) {
+  return <div onClick={onClick} style={{padding:'14px 20px',display:'flex',alignItems:'center',gap:14,borderTop:'1px solid var(--divider)',cursor:'pointer',justifyContent:center?'center':'flex-start',fontSize:15,color:center?'var(--accent)':'var(--text)',fontWeight:center?600:400}}>
+    {icon&&<Ic d={icon} size={20} color="var(--accent)"/>}
+    {label}
+  </div>;
+}
+function AddMembersSheet({existingIds,onDone}) {
+  const [search,setSearch]=useState('');
+  const [selected,setSelected]=useState([]);
+  const toggle=id=>setSelected(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
+  const available=USERS.filter(u=>!existingIds.includes(u.id));
+  const results=search.length>=1?available.filter(u=>u.name.toLowerCase().includes(search.toLowerCase())):available;
+  return <div style={{padding:'0 16px',maxHeight:540,display:'flex',flexDirection:'column'}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'4px 0 12px'}}>
+      <div style={{fontSize:17,fontWeight:600,color:'var(--text)'}}>Добавить</div>
+      <button onClick={onDone} disabled={!selected.length} style={{background:'none',border:'none',color:selected.length?'var(--accent)':'var(--text-muted)',fontSize:15,fontWeight:600,cursor:'pointer'}}>Готово{selected.length>0&&` (${selected.length})`}</button>
+    </div>
+    <div style={{background:'var(--input-bg)',borderRadius:10,display:'flex',alignItems:'center',gap:8,padding:'8px 12px',marginBottom:10}}>
+      <Ic d={icons.search} size={16} color="var(--text-muted)"/>
+      <input autoFocus placeholder="Поиск" value={search} onChange={e=>setSearch(e.target.value)} style={{background:'none',border:'none',flex:1,color:'var(--text)',fontSize:14}}/>
+    </div>
+    <div style={{flex:1,overflowY:'auto',paddingBottom:8}}>
+      {results.length===0&&<div style={{textAlign:'center',color:'var(--text-muted)',fontSize:13,padding:'20px 0'}}>Нет доступных пользователей</div>}
+      {results.map(u=>(
+        <div key={u.id} onClick={()=>toggle(u.id)} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 4px',cursor:'pointer'}}>
+          <Avatar name={u.name} color={u.color} size={40} online={u.online}/>
+          <div style={{flex:1}}>
+            <div style={{fontSize:14,fontWeight:500,color:'var(--text)'}}>{u.name}</div>
+            <div style={{fontSize:12,color:'var(--text-muted)'}}>@{u.username}</div>
+          </div>
+          <div style={{width:22,height:22,borderRadius:6,border:`2px solid ${selected.includes(u.id)?'var(--accent)':'var(--divider)'}`,background:selected.includes(u.id)?'var(--accent)':'transparent',display:'flex',alignItems:'center',justifyContent:'center'}}>
+            {selected.includes(u.id)&&<Ic d={icons.check} size={12} color="#fff"/>}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+
+</script>
+</body>
+</html>

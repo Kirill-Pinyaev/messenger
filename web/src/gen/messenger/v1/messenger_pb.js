@@ -30,6 +30,19 @@ export const ConversationRole = /*@__PURE__*/ proto3.makeEnum(
 );
 
 /**
+ * @generated from enum messenger.v1.AttachmentKind
+ */
+export const AttachmentKind = /*@__PURE__*/ proto3.makeEnum(
+  "messenger.v1.AttachmentKind",
+  [
+    {no: 0, name: "ATTACHMENT_KIND_UNSPECIFIED", localName: "UNSPECIFIED"},
+    {no: 1, name: "ATTACHMENT_KIND_IMAGE", localName: "IMAGE"},
+    {no: 2, name: "ATTACHMENT_KIND_VIDEO", localName: "VIDEO"},
+    {no: 3, name: "ATTACHMENT_KIND_FILE", localName: "FILE"},
+  ],
+);
+
+/**
  * @generated from message messenger.v1.RegisterRequest
  */
 export const RegisterRequest = /*@__PURE__*/ proto3.makeMessageType(
@@ -437,6 +450,7 @@ export const Message = /*@__PURE__*/ proto3.makeMessageType(
     { no: 13, name: "recipient_signed_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
     { no: 14, name: "recipient_one_time_prekey_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 15, name: "recipient_one_time_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 16, name: "attachments", kind: "message", T: Attachment, repeated: true },
   ],
 );
 
@@ -458,6 +472,7 @@ export const SendMessageRequest = /*@__PURE__*/ proto3.makeMessageType(
     { no: 10, name: "recipient_signed_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
     { no: 11, name: "recipient_one_time_prekey_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 12, name: "recipient_one_time_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 13, name: "attachments", kind: "message", T: Attachment, repeated: true },
   ],
 );
 
@@ -511,6 +526,115 @@ export const DeleteMessageRequest = /*@__PURE__*/ proto3.makeMessageType(
   "messenger.v1.DeleteMessageRequest",
   () => [
     { no: 1, name: "message_id", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.AttachmentPreview
+ */
+export const AttachmentPreview = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.AttachmentPreview",
+  () => [
+    { no: 1, name: "width", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+    { no: 2, name: "height", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.Attachment
+ */
+export const Attachment = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.Attachment",
+  () => [
+    { no: 1, name: "attachment_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "kind", kind: "enum", T: proto3.getEnumType(AttachmentKind) },
+    { no: 3, name: "filename", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 4, name: "mime_type", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 5, name: "size_bytes", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
+    { no: 6, name: "media_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 7, name: "encrypted_descriptor", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 8, name: "descriptor_nonce", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 9, name: "preview", kind: "message", T: AttachmentPreview },
+    { no: 10, name: "sha256", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 11, name: "ciphertext_size", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.PrepareMediaUploadRequest
+ */
+export const PrepareMediaUploadRequest = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.PrepareMediaUploadRequest",
+  () => [
+    { no: 1, name: "filename", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "mime_type", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 3, name: "size_bytes", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
+    { no: 4, name: "kind", kind: "enum", T: proto3.getEnumType(AttachmentKind) },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.PrepareMediaUploadResponse
+ */
+export const PrepareMediaUploadResponse = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.PrepareMediaUploadResponse",
+  () => [
+    { no: 1, name: "media_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "max_size_bytes", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.UploadMediaRequest
+ */
+export const UploadMediaRequest = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.UploadMediaRequest",
+  () => [
+    { no: 1, name: "media_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "ciphertext", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 3, name: "nonce", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 4, name: "sha256", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 5, name: "size_bytes", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
+    { no: 6, name: "mime_type", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 7, name: "filename", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 8, name: "kind", kind: "enum", T: proto3.getEnumType(AttachmentKind) },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.UploadMediaResponse
+ */
+export const UploadMediaResponse = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.UploadMediaResponse",
+  () => [
+    { no: 1, name: "media_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.GetMediaRequest
+ */
+export const GetMediaRequest = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.GetMediaRequest",
+  () => [
+    { no: 1, name: "media_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+  ],
+);
+
+/**
+ * @generated from message messenger.v1.GetMediaResponse
+ */
+export const GetMediaResponse = /*@__PURE__*/ proto3.makeMessageType(
+  "messenger.v1.GetMediaResponse",
+  () => [
+    { no: 1, name: "media_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "ciphertext", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 3, name: "nonce", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 4, name: "sha256", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 5, name: "size_bytes", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
+    { no: 6, name: "mime_type", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 7, name: "filename", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 8, name: "kind", kind: "enum", T: proto3.getEnumType(AttachmentKind) },
   ],
 );
 

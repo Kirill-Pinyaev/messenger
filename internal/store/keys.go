@@ -67,6 +67,8 @@ type KeyStore interface {
 	GetIdentityKey(ctx context.Context, username string) (IdentityKey, error)
 	GetIdentityKeys(ctx context.Context, usernames []string) ([]IdentityKey, error)
 	UpsertSignedPrekey(ctx context.Context, key SignedPrekey) (SignedPrekey, error)
+	GetSignedPrekey(ctx context.Context, username string) (SignedPrekey, error)
+	DeleteOneTimePrekeys(ctx context.Context, username string) error
 	PutOneTimePrekeys(ctx context.Context, username string, keys []OneTimePrekey) error
 	AcquirePrekeyBundle(ctx context.Context, username string) (PrekeyBundle, error)
 	UpsertConversationKey(ctx context.Context, key ConversationKey) (ConversationKey, error)
@@ -153,6 +155,21 @@ func (s *MemoryKeyStore) UpsertSignedPrekey(_ context.Context, key SignedPrekey)
 	return cloneSignedPrekey(key), nil
 }
 
+func (s *MemoryKeyStore) GetSignedPrekey(_ context.Context, username string) (SignedPrekey, error) {
+	if strings.TrimSpace(username) == "" {
+		return SignedPrekey{}, ErrBadInput
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	key, ok := s.signedPrekeys[username]
+	if !ok {
+		return SignedPrekey{}, ErrSignedPrekeyNotFound
+	}
+	return cloneSignedPrekey(key), nil
+}
+
 func (s *MemoryKeyStore) PutOneTimePrekeys(_ context.Context, username string, keys []OneTimePrekey) error {
 	if strings.TrimSpace(username) == "" {
 		return ErrBadInput
@@ -172,6 +189,17 @@ func (s *MemoryKeyStore) PutOneTimePrekeys(_ context.Context, username string, k
 		key.PublicKey = append([]byte(nil), key.PublicKey...)
 		s.oneTimePrekeys[username] = append(s.oneTimePrekeys[username], key)
 	}
+	return nil
+}
+
+func (s *MemoryKeyStore) DeleteOneTimePrekeys(_ context.Context, username string) error {
+	if strings.TrimSpace(username) == "" {
+		return ErrBadInput
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.oneTimePrekeys, username)
 	return nil
 }
 

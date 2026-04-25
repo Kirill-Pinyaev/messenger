@@ -40,7 +40,7 @@ func TestPostgresStoresIntegration(t *testing.T) {
 		t.Fatalf("NewPostgresConversationStore() error = %v", err)
 	}
 
-	if _, err := pool.Exec(ctx, "TRUNCATE TABLE conversation_members, conversations, messages, users RESTART IDENTITY"); err != nil {
+	if _, err := pool.Exec(ctx, "TRUNCATE TABLE conversation_members, conversations, message_attachments, media_objects, messages, users RESTART IDENTITY CASCADE"); err != nil {
 		t.Fatalf("TRUNCATE error = %v", err)
 	}
 
@@ -220,6 +220,86 @@ func TestPostgresStoresIntegration(t *testing.T) {
 	}
 	if len(groupFound) != 1 || groupFound[0].ID != groupMsg.ID {
 		t.Fatalf("SearchMessages(group) = %+v", groupFound)
+	}
+
+	preparedMedia, err := messageStore.PrepareMedia(ctx, MediaObject{
+		MediaID:       "media-1",
+		OwnerUsername: "alice",
+		StorageKey:    "ab/media-1.bin",
+		Filename:      "photo.png",
+		MimeType:      "image/png",
+		Kind:          AttachmentKindImage,
+		SizeBytes:     128,
+		CreatedAt:     time.Now().UTC().Truncate(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("PrepareMedia() error = %v", err)
+	}
+	if preparedMedia.Uploaded {
+		t.Fatalf("PrepareMedia() = %+v, want uploaded=false", preparedMedia)
+	}
+
+	uploadedMedia, err := messageStore.CompleteMedia(ctx, MediaObject{
+		MediaID:        "media-1",
+		OwnerUsername:  "alice",
+		StorageKey:     "ab/media-1.bin",
+		Filename:       "photo.png",
+		MimeType:       "image/png",
+		Kind:           AttachmentKindImage,
+		SizeBytes:      128,
+		CiphertextSize: 144,
+		Nonce:          []byte{1, 2, 3},
+		SHA256:         []byte{4, 5, 6},
+		UploadedAt:     time.Now().UTC().Truncate(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("CompleteMedia() error = %v", err)
+	}
+	if !uploadedMedia.Uploaded || uploadedMedia.CiphertextSize != 144 {
+		t.Fatalf("CompleteMedia() = %+v", uploadedMedia)
+	}
+
+	attachmentMsg, err := messageStore.Save(ctx, Message{
+		ConversationID: "alice|bob",
+		From:           "alice",
+		To:             "bob",
+		Attachments: []Attachment{{
+			AttachmentID:        "att-1",
+			Kind:                AttachmentKindImage,
+			Filename:            "photo.png",
+			MimeType:            "image/png",
+			SizeBytes:           128,
+			MediaID:             "media-1",
+			EncryptedDescriptor: []byte{7, 8, 9},
+			DescriptorNonce:     []byte{10, 11, 12},
+			SHA256:              []byte{4, 5, 6},
+			CiphertextSize:      144,
+			PreviewWidth:        320,
+			PreviewHeight:       240,
+		}},
+		TS: time.Now().UTC().Truncate(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("Save(attachment) error = %v", err)
+	}
+	if len(attachmentMsg.Attachments) != 1 {
+		t.Fatalf("Save(attachment) = %+v", attachmentMsg)
+	}
+
+	gotAttachmentMsg, err := messageStore.GetByID(ctx, attachmentMsg.ID)
+	if err != nil {
+		t.Fatalf("GetByID(attachment) error = %v", err)
+	}
+	if len(gotAttachmentMsg.Attachments) != 1 || gotAttachmentMsg.Attachments[0].PreviewWidth != 320 {
+		t.Fatalf("GetByID(attachment) = %+v", gotAttachmentMsg)
+	}
+
+	canAccess, err := messageStore.CanAccessMedia(ctx, "alice", "media-1")
+	if err != nil {
+		t.Fatalf("CanAccessMedia() error = %v", err)
+	}
+	if !canAccess {
+		t.Fatal("CanAccessMedia() = false, want true")
 	}
 
 	keyStore, err := NewPostgresKeyStore(ctx, pool)

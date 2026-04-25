@@ -110,6 +110,26 @@ func (s *PostgresKeyStore) UpsertSignedPrekey(ctx context.Context, key SignedPre
 	return key, nil
 }
 
+func (s *PostgresKeyStore) GetSignedPrekey(ctx context.Context, username string) (SignedPrekey, error) {
+	if strings.TrimSpace(username) == "" {
+		return SignedPrekey{}, ErrBadInput
+	}
+
+	var key SignedPrekey
+	err := s.pool.QueryRow(ctx, `
+		SELECT username, key_id, algorithm, public_key, published_at
+		FROM signed_prekeys
+		WHERE username = $1
+	`, username).Scan(&key.Username, &key.KeyID, &key.Algorithm, &key.PublicKey, &key.PublishedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SignedPrekey{}, ErrSignedPrekeyNotFound
+		}
+		return SignedPrekey{}, err
+	}
+	return key, nil
+}
+
 func (s *PostgresKeyStore) PutOneTimePrekeys(ctx context.Context, username string, keys []OneTimePrekey) error {
 	if strings.TrimSpace(username) == "" {
 		return ErrBadInput
@@ -142,6 +162,17 @@ func (s *PostgresKeyStore) PutOneTimePrekeys(ctx context.Context, username strin
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func (s *PostgresKeyStore) DeleteOneTimePrekeys(ctx context.Context, username string) error {
+	if strings.TrimSpace(username) == "" {
+		return ErrBadInput
+	}
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM one_time_prekeys
+		WHERE username = $1
+	`, username)
+	return err
 }
 
 func (s *PostgresKeyStore) AcquirePrekeyBundle(ctx context.Context, username string) (PrekeyBundle, error) {

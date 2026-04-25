@@ -22,6 +22,12 @@ import {
   topUpOneTimePrekeys,
   createGroupKeyPackage,
 } from "./lib/e2ee.js";
+import {
+  decryptMediaBytes,
+  deserializeMediaDescriptor,
+  encryptMediaBytes,
+  serializeMediaDescriptor,
+} from "./lib/media-e2ee.js";
 import { addDraftMember, filterSelectableUsers, removeDraftMember } from "./lib/group-editor.js";
 import { canManageGroupMembers, canRemoveGroupMember, canTransferAdmin, currentUserRole } from "./lib/group-permissions.js";
 import {
@@ -181,8 +187,10 @@ const state = {
   identity: null,
   identityKeys: new Map(),
   groupKeys: new Map(),
+  mediaCache: new Map(),
   encryptionPrefs: new Map(),
   e2eeReady: false,
+  pendingAttachments: [],
   profileDraft: {
     firstName: "",
     lastName: "",
@@ -754,7 +762,19 @@ function renderChat() {
               ${selectedMessage.from === state.username ? `<button id="delete-message" class="btn btn-danger btn-sm" type="button">${ic("trash", 14)} Удалить</button>` : ""}
             </div>
           ` : ""}
+          ${state.pendingAttachments.length > 0 ? `
+            <div class="selected-bar" style="gap:8px;flex-wrap:wrap;">
+              ${state.pendingAttachments.map((item, index) => `
+                <span class="member-chip">
+                  ${escapeHtml(item.filename)}
+                  <button type="button" class="chip-remove" data-remove-attachment="${index}" aria-label="Удалить вложение">×</button>
+                </span>
+              `).join("")}
+            </div>
+          ` : ""}
           <div class="composer-inner">
+            <input id="message-attachment-input" type="file" hidden multiple />
+            <button id="pick-attachment" class="icon-btn" type="button" title="Добавить файл">${ic("plus", 16)}</button>
             <textarea id="message-text" placeholder="Написать сообщение..." rows="1"></textarea>
             <button id="send-message" class="send-btn" type="button">${ic("send", 16)}</button>
           </div>
@@ -898,9 +918,10 @@ function renderChat() {
   const sendBtn = document.getElementById("send-message");
   if (textarea && sendBtn) {
     const updateSendBtn = () => {
-      sendBtn.classList.toggle("ready", textarea.value.trim().length > 0);
+      sendBtn.classList.toggle("ready", textarea.value.trim().length > 0 || state.pendingAttachments.length > 0);
     };
     textarea.addEventListener("input", updateSendBtn);
+    updateSendBtn();
   }
 
   if (activeConversation) {
@@ -952,6 +973,7 @@ function renderMessages(messages, searchQuery = "", searchCurrentMsgId = 0) {
     ].filter(Boolean).join(" ");
 
     const bodyText = searchQuery ? highlightText(String(msg.text || ""), searchQuery) : escapeHtml(msg.text || "");
+    const attachmentsHtml = renderAttachmentBodies(msg.attachments || []);
     const e2eeBadge = msg.encrypted ? `<span class="bubble-e2ee ${msg.decryptionError ? "error" : ""}">${msg.decryptionError ? "ошибка E2EE" : "E2EE"}</span>` : "";
 
     return `
@@ -961,7 +983,8 @@ function renderMessages(messages, searchQuery = "", searchCurrentMsgId = 0) {
         <div style="display:flex;flex-direction:column;max-width:65%;min-width:0;">
           ${showSender ? `<div class="bubble-sender" style="color:${senderColor};">${escapeHtml(senderName)}</div>` : ""}
           <div class="${bubbleClasses}" data-message-select="${msg.messageId}">
-            ${bodyText}
+            ${bodyText ? `<div>${bodyText}</div>` : ""}
+            ${attachmentsHtml}
             <div class="bubble-foot">
               ${e2eeBadge}
               ${escapeHtml(time)}
@@ -1119,59 +1142,107 @@ function bindChatEvents() {
     });
   });
 
+  document.getElementById("pick-attachment")?.addEventListener("click", () => {
+    document.getElementById("message-attachment-input")?.click();
+  });
+
+  document.getElementById("message-attachment-input")?.addEventListener("change", async (event) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) {
+      return;
+    }
+    try {
+      for (const file of files) {
+        if (file.size > 25 * 1024 * 1024) {
+          throw new Error(`Файл ${file.name} больше 25 МБ.`);
+        }
+        state.pendingAttachments.push({
+          file,
+          filename: file.name,
+          mimeType: file.type || "application/octet-stream",
+        });
+      }
+      render();
+    } catch (err) {
+      alert(readError(err));
+    } finally {
+      event.target.value = "";
+    }
+  });
+
+  document.querySelectorAll("[data-remove-attachment]").forEach((element) => {
+    element.addEventListener("click", () => {
+      const index = Number(element.getAttribute("data-remove-attachment"));
+      if (!Number.isNaN(index)) {
+        state.pendingAttachments.splice(index, 1);
+        render();
+      }
+    });
+  });
+
   async function sendCurrentMessage() {
     const textarea = document.getElementById("message-text");
     const text = String(textarea?.value || "").trim();
     const activeConversation = state.conversations.find((item) => item.conversationId === state.activeConversationId);
-    if (!activeConversation || !text) return;
+    if (!activeConversation || (!text && state.pendingAttachments.length === 0)) return;
     const encryptionEnabled = isConversationEncryptionEnabled(state.encryptionPrefs, activeConversation.conversationId);
 
     try {
       let payload;
+      let attachments = [];
+      if (state.pendingAttachments.length > 0 && !encryptionEnabled) {
+        throw new Error("Вложения доступны только при включенном E2EE.");
+      }
+      if (state.pendingAttachments.length > 0) {
+        attachments = await prepareOutgoingAttachments(activeConversation);
+      }
       if (!encryptionEnabled) {
         payload = activeConversation.kind === 2
           ? {
             conversationId: activeConversation.conversationId,
             text,
             encrypted: false,
+            attachments,
           }
           : {
             to: state.activePeer,
             text,
             encrypted: false,
+            attachments,
           };
       } else if (activeConversation.kind === 2) {
-        let version;
-        let groupKeyBytes;
-        try {
-          ({ version, groupKeyBytes } = await loadLatestConversationKey(activeConversation.conversationId));
-        } catch {
-          version = 1;
-          groupKeyBytes = await rotateConversationKey(activeConversation, version);
+        const { version, groupKeyBytes } = await ensureConversationKey(activeConversation);
+        const encrypted = text ? await encryptGroupMessage(text, groupKeyBytes, version) : null;
+        if (attachments.length > 0) {
+          attachments = await encryptOutgoingAttachmentDescriptorsForGroup(attachments, groupKeyBytes, version);
         }
-        const encrypted = await encryptGroupMessage(text, groupKeyBytes, version);
         payload = {
           conversationId: activeConversation.conversationId,
-          ciphertext: encrypted.ciphertext,
-          nonce: encrypted.nonce,
+          ciphertext: encrypted?.ciphertext,
+          nonce: encrypted?.nonce,
           senderKeyId: state.identity.keyId,
           conversationKeyVersion: version,
           encrypted: true,
+          attachments,
         };
       } else {
         const recipientBundle = await acquirePrekeyBundle(state.activePeer);
-        const encrypted = await encryptDirectMessage(text, state.identity, recipientBundle);
+        const encrypted = text ? await encryptDirectMessage(text, state.identity, recipientBundle) : null;
+        if (attachments.length > 0) {
+          attachments = await encryptOutgoingAttachmentDescriptorsForDirect(attachments, recipientBundle);
+        }
         payload = {
           to: state.activePeer,
-          ciphertext: encrypted.ciphertext,
-          nonce: encrypted.nonce,
-          senderKeyId: encrypted.senderKeyId,
+          ciphertext: encrypted?.ciphertext,
+          nonce: encrypted?.nonce,
+          senderKeyId: encrypted?.senderKeyId || state.identity.keyId,
           conversationKeyVersion: 1,
           encrypted: true,
-          recipientSignedPrekeyId: encrypted.recipientSignedPrekeyId,
-          recipientSignedPrekeyPublic: encrypted.recipientSignedPrekeyPublic,
-          recipientOneTimePrekeyId: encrypted.recipientOneTimePrekeyId,
-          recipientOneTimePrekeyPublic: encrypted.recipientOneTimePrekeyPublic,
+          recipientSignedPrekeyId: encrypted?.recipientSignedPrekeyId || recipientBundle.signedPrekey.keyId,
+          recipientSignedPrekeyPublic: encrypted?.recipientSignedPrekeyPublic || recipientBundle.signedPrekey.publicKey,
+          recipientOneTimePrekeyId: encrypted?.recipientOneTimePrekeyId || recipientBundle.oneTimePrekey?.keyId || "",
+          recipientOneTimePrekeyPublic: encrypted?.recipientOneTimePrekeyPublic || recipientBundle.oneTimePrekey?.publicKey || new Uint8Array(),
+          attachments,
         };
       }
       const message = await materializeMessage(await messageClient.sendMessage(payload));
@@ -1180,6 +1251,7 @@ function bindChatEvents() {
         textarea.value = "";
         textarea.style.height = "auto"; // сброс высоты после отправки
       }
+      state.pendingAttachments = [];
       state.selectedMessageId = 0;
       render();
       scrollMessagesToBottom();
@@ -2111,30 +2183,205 @@ async function buildNextGroupKeyUpdate(conversationId, version, members) {
   };
 }
 
+async function ensureConversationKey(conversation) {
+  let version;
+  let groupKeyBytes;
+  try {
+    ({ version, groupKeyBytes } = await loadLatestConversationKey(conversation.conversationId));
+  } catch {
+    version = 1;
+    groupKeyBytes = await rotateConversationKey(conversation, version);
+  }
+  return { version, groupKeyBytes };
+}
+
+async function prepareOutgoingAttachments(activeConversation) {
+  const out = [];
+  for (const draft of state.pendingAttachments) {
+    const bytes = new Uint8Array(await draft.file.arrayBuffer());
+    const encrypted = await encryptMediaBytes(bytes, draft.mimeType, draft.filename);
+    const prepared = await messageClient.prepareMediaUpload({
+      filename: draft.filename,
+      mimeType: draft.mimeType,
+      sizeBytes: draft.file.size,
+      kind: attachmentKindToProtoValue(encrypted.kind),
+    });
+    await messageClient.uploadMedia({
+      mediaId: prepared.mediaId,
+      ciphertext: encrypted.ciphertext,
+      nonce: encrypted.nonce,
+      sha256: encrypted.sha256,
+      sizeBytes: draft.file.size,
+      mimeType: draft.mimeType,
+      filename: draft.filename,
+      kind: attachmentKindToProtoValue(encrypted.kind),
+    });
+    out.push({
+      attachmentId: `${prepared.mediaId}-att`,
+      kind: attachmentKindToProtoValue(encrypted.kind),
+      filename: draft.filename,
+      mimeType: draft.mimeType,
+      sizeBytes: draft.file.size,
+      mediaId: prepared.mediaId,
+      descriptorPlaintext: serializeMediaDescriptor(encrypted.descriptor),
+      sha256: encrypted.sha256,
+      ciphertextSize: encrypted.ciphertextSize,
+      preview: encrypted.kind === "image" ? { width: 0, height: 0 } : undefined,
+      conversationId: activeConversation.conversationId,
+    });
+  }
+  return out;
+}
+
+async function encryptOutgoingAttachmentDescriptorsForDirect(attachments, recipientBundle) {
+  const out = [];
+  for (const attachment of attachments) {
+    const encryptedDescriptor = await encryptDirectMessage(
+      new TextDecoder().decode(attachment.descriptorPlaintext),
+      state.identity,
+      recipientBundle,
+    );
+    out.push({
+      attachmentId: attachment.attachmentId,
+      kind: attachment.kind,
+      filename: attachment.filename,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      mediaId: attachment.mediaId,
+      encryptedDescriptor: encryptedDescriptor.ciphertext,
+      descriptorNonce: encryptedDescriptor.nonce,
+      sha256: attachment.sha256,
+      ciphertextSize: attachment.ciphertextSize,
+      preview: attachment.preview,
+    });
+  }
+  return out;
+}
+
+async function encryptOutgoingAttachmentDescriptorsForGroup(attachments, groupKeyBytes, version) {
+  const out = [];
+  for (const attachment of attachments) {
+    const encryptedDescriptor = await encryptGroupMessage(
+      new TextDecoder().decode(attachment.descriptorPlaintext),
+      groupKeyBytes,
+      version,
+    );
+    out.push({
+      attachmentId: attachment.attachmentId,
+      kind: attachment.kind,
+      filename: attachment.filename,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      mediaId: attachment.mediaId,
+      encryptedDescriptor: encryptedDescriptor.ciphertext,
+      descriptorNonce: encryptedDescriptor.nonce,
+      sha256: attachment.sha256,
+      ciphertextSize: attachment.ciphertextSize,
+      preview: attachment.preview,
+    });
+  }
+  return out;
+}
+
+function attachmentKindToProtoValue(kind) {
+  if (kind === "image") {
+    return 1;
+  }
+  if (kind === "video") {
+    return 2;
+  }
+  return 3;
+}
+
 async function materializeMessage(message) {
+  let text = message?.text || "";
+  let decryptionError = false;
   if (!message?.encrypted) {
-    return message;
+    const attachments = await Promise.all((message.attachments || []).map((item) => materializeAttachment(message, item)));
+    return { ...message, attachments };
   }
 
   try {
-    if (message.conversationId === message.to) {
-      const groupKeyBytes = await loadConversationKey(message.conversationId, message.conversationKeyVersion);
-      const text = await decryptGroupMessage(message, groupKeyBytes);
-      return { ...message, text, decryptionError: false };
+    if (message.ciphertext?.length) {
+      if (message.conversationId === message.to) {
+        const groupKeyBytes = await loadConversationKey(message.conversationId, message.conversationKeyVersion);
+        text = await decryptGroupMessage(message, groupKeyBytes);
+      } else if (message.from === state.username) {
+        text = await decryptDirectMessageForSender(message, state.identity);
+      } else {
+        const senderIdentity = await fetchIdentityKey(message.from);
+        text = await decryptDirectMessageForRecipient(message, state.identity, senderIdentity.publicKey);
+      }
     }
-
-    let text;
-    if (message.from === state.username) {
-      text = await decryptDirectMessageForSender(message, state.identity);
-    } else {
-      const senderIdentity = await fetchIdentityKey(message.from);
-      text = await decryptDirectMessageForRecipient(message, state.identity, senderIdentity.publicKey);
-    }
-    return { ...message, text, decryptionError: false };
   } catch (error) {
     console.error(error);
-    return { ...message, text: "[Не удалось расшифровать]", decryptionError: true };
+    text = "[Не удалось расшифровать]";
+    decryptionError = true;
   }
+
+  const attachments = await Promise.all((message.attachments || []).map((item) => materializeAttachment(message, item)));
+  return { ...message, text, decryptionError, attachments };
+}
+
+async function materializeAttachment(message, attachment) {
+  try {
+    const cacheKey = `${message.conversationId}:${attachment.mediaId}`;
+    if (state.mediaCache.has(cacheKey)) {
+      return { ...attachment, ...state.mediaCache.get(cacheKey), decryptionError: false };
+    }
+    let descriptorText;
+    if (message.conversationId === message.to) {
+      const groupKeyBytes = await loadConversationKey(message.conversationId, message.conversationKeyVersion);
+      descriptorText = await decryptGroupMessage({
+        ciphertext: attachment.encryptedDescriptor,
+        nonce: attachment.descriptorNonce,
+      }, groupKeyBytes);
+    } else if (message.from === state.username) {
+      descriptorText = await decryptDirectMessageForSender({
+        ciphertext: attachment.encryptedDescriptor,
+        nonce: attachment.descriptorNonce,
+        recipientSignedPrekeyPublic: message.recipientSignedPrekeyPublic,
+        recipientOneTimePrekeyPublic: message.recipientOneTimePrekeyPublic,
+      }, state.identity);
+    } else {
+      const senderIdentity = await fetchIdentityKey(message.from);
+      descriptorText = await decryptDirectMessageForRecipient({
+        ciphertext: attachment.encryptedDescriptor,
+        nonce: attachment.descriptorNonce,
+        recipientOneTimePrekeyId: message.recipientOneTimePrekeyId,
+      }, state.identity, senderIdentity.publicKey);
+    }
+    const descriptor = deserializeMediaDescriptor(new TextEncoder().encode(descriptorText));
+    const media = await messageClient.getMedia({ mediaId: attachment.mediaId });
+    const plaintext = await decryptMediaBytes(media.ciphertext, descriptor, media.nonce);
+    const blob = new Blob([plaintext], { type: descriptor.mimeType });
+    const objectUrl = URL.createObjectURL(blob);
+    const materialized = {
+      objectUrl,
+      mimeType: descriptor.mimeType,
+      filename: descriptor.originalFilename,
+      kind: descriptor.kind,
+      sizeBytes: descriptor.sizeBytes,
+    };
+    state.mediaCache.set(cacheKey, materialized);
+    return { ...attachment, ...materialized, decryptionError: false };
+  } catch (error) {
+    console.error(error);
+    return { ...attachment, decryptionError: true };
+  }
+}
+
+function renderAttachmentBodies(attachments) {
+  return attachments.map((item) => {
+    if (item.decryptionError) {
+      return `<div class="attach-card">[Не удалось расшифровать вложение]</div>`;
+    }
+    if (item.kind === 1 || item.kind === "image") {
+      return `<div class="attach-card"><img src="${escapeHtml(item.objectUrl || "")}" alt="${escapeHtml(item.filename || "image")}" style="max-width:240px;border-radius:14px;display:block;" /></div>`;
+    }
+    const label = item.kind === 2 || item.kind === "video" ? "Видео" : "Файл";
+    return `<a class="attach-card" href="${escapeHtml(item.objectUrl || "#")}" download="${escapeHtml(item.filename || "file")}">${label}: ${escapeHtml(item.filename || "attachment")}</a>`;
+  }).join("");
 }
 
 function getActiveMessages() {
@@ -2181,8 +2428,10 @@ function resetSession() {
   state.identity = null;
   state.identityKeys = new Map();
   state.groupKeys = new Map();
+  state.mediaCache = new Map();
   state.encryptionPrefs = new Map();
   state.e2eeReady = false;
+  state.pendingAttachments = [];
   state.activeConversationId = "";
   state.activePeer = "";
   state.userSearchQuery = "";

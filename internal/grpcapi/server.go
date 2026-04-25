@@ -4,7 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -32,6 +35,7 @@ type Server struct {
 	convStore store.ConversationStore
 	keyStore  store.KeyStore
 	groupState store.GroupStateStore
+	mediaRoot string
 	hub       *eventHub
 }
 
@@ -43,6 +47,7 @@ func NewServer(authSvc *auth.Service, userStore store.UserStore, msgStore store.
 		convStore: convStore,
 		keyStore:  keyStore,
 		groupState: store.NewGroupStateStore(convStore, keyStore),
+		mediaRoot: defaultMediaRoot(),
 		hub:       newEventHub(),
 	}
 }
@@ -78,9 +83,14 @@ func (s *Server) DeleteAccount(ctx context.Context, _ *emptypb.Empty) (*emptypb.
 		return nil, err
 	}
 
+	ownedMedia, err := s.msgStore.ListMediaByOwner(ctx, username)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to load media")
+	}
 	if err := s.msgStore.DeleteUser(ctx, username); err != nil {
 		return nil, status.Error(codes.Internal, "failed to delete messages")
 	}
+	s.deleteMediaFiles(ownedMedia)
 	if err := s.convStore.DeleteUser(ctx, username); err != nil {
 		return nil, status.Error(codes.Internal, "failed to delete conversations")
 	}
@@ -232,6 +242,11 @@ func (s *Server) PublishPrekeyBundle(ctx context.Context, req *messengerv1.Publi
 		}
 		return nil, status.Error(codes.Internal, "failed to load identity key")
 	}
+	existingSignedPrekey, err := s.keyStore.GetSignedPrekey(ctx, username)
+	if err != nil && !errors.Is(err, store.ErrSignedPrekeyNotFound) && !errors.Is(err, store.ErrBadInput) {
+		return nil, status.Error(codes.Internal, "failed to load signed prekey")
+	}
+	resetOTPQueue := err == nil && (existingSignedPrekey.KeyID != req.GetSignedPrekeyId() || !slices.Equal(existingSignedPrekey.PublicKey, req.GetSignedPrekeyPublicKey()))
 
 	signedPrekey, err := s.keyStore.UpsertSignedPrekey(ctx, store.SignedPrekey{
 		Username:  username,
@@ -254,6 +269,11 @@ func (s *Server) PublishPrekeyBundle(ctx context.Context, req *messengerv1.Publi
 			Algorithm: item.GetAlgorithm(),
 			PublicKey: item.GetPublicKey(),
 		})
+	}
+	if resetOTPQueue {
+		if err := s.keyStore.DeleteOneTimePrekeys(ctx, username); err != nil {
+			return nil, status.Error(codes.Internal, "failed to reset one-time prekeys")
+		}
 	}
 	if err := s.keyStore.PutOneTimePrekeys(ctx, username, oneTimePrekeys); err != nil {
 		if errors.Is(err, store.ErrBadInput) {
@@ -648,10 +668,13 @@ func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRe
 	if err != nil {
 		return nil, err
 	}
-	if !req.GetEncrypted() && req.GetText() == "" {
-		return nil, status.Error(codes.InvalidArgument, "text is required")
+	if !req.GetEncrypted() && req.GetText() == "" && len(req.GetAttachments()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "text or attachments are required")
 	}
-	if req.GetEncrypted() && (len(req.GetCiphertext()) == 0 || len(req.GetNonce()) == 0 || req.GetSenderKeyId() == "") {
+	if req.GetEncrypted() && len(req.GetCiphertext()) == 0 && req.GetText() == "" && len(req.GetAttachments()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "ciphertext, text or attachments are required")
+	}
+	if req.GetEncrypted() && len(req.GetCiphertext()) > 0 && (len(req.GetNonce()) == 0 || req.GetSenderKeyId() == "") {
 		return nil, status.Error(codes.InvalidArgument, "ciphertext, nonce and sender_key_id are required")
 	}
 
@@ -681,6 +704,28 @@ func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRe
 		participants = append(participants, recipient)
 	}
 
+	attachments := make([]store.Attachment, 0, len(req.GetAttachments()))
+	for _, item := range req.GetAttachments() {
+		kind, err := attachmentKindFromProto(item.GetKind())
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "bad attachment kind")
+		}
+		attachments = append(attachments, store.Attachment{
+			AttachmentID:        item.GetAttachmentId(),
+			Kind:                kind,
+			Filename:            item.GetFilename(),
+			MimeType:            item.GetMimeType(),
+			SizeBytes:           item.GetSizeBytes(),
+			MediaID:             item.GetMediaId(),
+			EncryptedDescriptor: item.GetEncryptedDescriptor(),
+			DescriptorNonce:     item.GetDescriptorNonce(),
+			SHA256:              item.GetSha256(),
+			CiphertextSize:      item.GetCiphertextSize(),
+			PreviewWidth:        item.GetPreview().GetWidth(),
+			PreviewHeight:       item.GetPreview().GetHeight(),
+		})
+	}
+
 	saved, err := s.msgStore.Save(ctx, store.Message{
 		ConversationID: convID,
 		From:           username,
@@ -695,6 +740,7 @@ func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRe
 		RecipientSignedPrekeyPublic: req.GetRecipientSignedPrekeyPublic(),
 		RecipientOneTimePrekeyID: req.GetRecipientOneTimePrekeyId(),
 		RecipientOneTimePrekeyPublic: req.GetRecipientOneTimePrekeyPublic(),
+		Attachments:    attachments,
 		TS:             now,
 	})
 	if err != nil {
@@ -802,6 +848,142 @@ func (s *Server) DeleteMessage(ctx context.Context, req *messengerv1.DeleteMessa
 	}
 	s.hub.publishUsers(recipients, newMessageDeletedEvent(req.GetMessageId(), msg.ConversationID))
 	return &emptypb.Empty{}, nil
+}
+
+func (s *Server) PrepareMediaUpload(ctx context.Context, req *messengerv1.PrepareMediaUploadRequest) (*messengerv1.PrepareMediaUploadResponse, error) {
+	username, _, err := s.requireAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+	kind, err := attachmentKindFromProto(req.GetKind())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "bad attachment kind")
+	}
+	if strings.TrimSpace(req.GetFilename()) == "" || strings.TrimSpace(req.GetMimeType()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "filename and mime_type are required")
+	}
+	if req.GetSizeBytes() <= 0 || req.GetSizeBytes() > store.MaxMediaSizeBytes {
+		return nil, status.Error(codes.InvalidArgument, "invalid file size")
+	}
+
+	mediaID := newMediaID()
+	media := store.MediaObject{
+		MediaID:       mediaID,
+		OwnerUsername: username,
+		StorageKey:    mediaStorageKey(mediaID),
+		Filename:      req.GetFilename(),
+		MimeType:      req.GetMimeType(),
+		Kind:          kind,
+		SizeBytes:     req.GetSizeBytes(),
+		CreatedAt:     time.Now().UTC(),
+	}
+	if _, err := s.msgStore.PrepareMedia(ctx, media); err != nil {
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad media metadata")
+		}
+		return nil, status.Error(codes.Internal, "failed to prepare media")
+	}
+	return &messengerv1.PrepareMediaUploadResponse{
+		MediaId:      mediaID,
+		MaxSizeBytes: store.MaxMediaSizeBytes,
+	}, nil
+}
+
+func (s *Server) UploadMedia(ctx context.Context, req *messengerv1.UploadMediaRequest) (*messengerv1.UploadMediaResponse, error) {
+	username, _, err := s.requireAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(req.GetMediaId()) == "" || len(req.GetCiphertext()) == 0 || len(req.GetNonce()) == 0 || len(req.GetSha256()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "media_id, ciphertext, nonce and sha256 are required")
+	}
+
+	media, err := s.msgStore.GetMedia(ctx, req.GetMediaId())
+	if err != nil {
+		if errors.Is(err, store.ErrMediaNotFound) {
+			return nil, status.Error(codes.NotFound, "media not found")
+		}
+		return nil, status.Error(codes.Internal, "failed to load media")
+	}
+	if media.OwnerUsername != username {
+		return nil, status.Error(codes.PermissionDenied, "not allowed")
+	}
+	if media.Uploaded {
+		return nil, status.Error(codes.AlreadyExists, "media already uploaded")
+	}
+
+	kind, err := attachmentKindFromProto(req.GetKind())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "bad attachment kind")
+	}
+	if media.SizeBytes != req.GetSizeBytes() || media.MimeType != req.GetMimeType() || media.Filename != req.GetFilename() || media.Kind != kind {
+		return nil, status.Error(codes.InvalidArgument, "media metadata mismatch")
+	}
+	if req.GetSizeBytes() <= 0 || req.GetSizeBytes() > store.MaxMediaSizeBytes {
+		return nil, status.Error(codes.InvalidArgument, "invalid file size")
+	}
+	if err := s.writeMediaFile(media.StorageKey, req.GetCiphertext()); err != nil {
+		return nil, status.Error(codes.Internal, "failed to store media")
+	}
+
+	media.Nonce = req.GetNonce()
+	media.SHA256 = req.GetSha256()
+	media.CiphertextSize = int64(len(req.GetCiphertext()))
+	media.Uploaded = true
+	media.UploadedAt = time.Now().UTC()
+	if _, err := s.msgStore.CompleteMedia(ctx, media); err != nil {
+		_ = s.removeMediaFile(media.StorageKey)
+		if errors.Is(err, store.ErrMediaNotFound) {
+			return nil, status.Error(codes.NotFound, "media not found")
+		}
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad media")
+		}
+		return nil, status.Error(codes.Internal, "failed to finalize media")
+	}
+	return &messengerv1.UploadMediaResponse{MediaId: media.MediaID}, nil
+}
+
+func (s *Server) GetMedia(ctx context.Context, req *messengerv1.GetMediaRequest) (*messengerv1.GetMediaResponse, error) {
+	username, _, err := s.requireAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+	allowed, err := s.msgStore.CanAccessMedia(ctx, username, req.GetMediaId())
+	if err != nil {
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "media_id is required")
+		}
+		return nil, status.Error(codes.Internal, "failed to authorize media access")
+	}
+	if !allowed {
+		return nil, status.Error(codes.PermissionDenied, "not allowed")
+	}
+
+	media, err := s.msgStore.GetMedia(ctx, req.GetMediaId())
+	if err != nil {
+		if errors.Is(err, store.ErrMediaNotFound) {
+			return nil, status.Error(codes.NotFound, "media not found")
+		}
+		return nil, status.Error(codes.Internal, "failed to load media")
+	}
+	ciphertext, err := s.readMediaFile(media.StorageKey)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, status.Error(codes.NotFound, "media blob not found")
+		}
+		return nil, status.Error(codes.Internal, "failed to read media")
+	}
+	return &messengerv1.GetMediaResponse{
+		MediaId:  media.MediaID,
+		Ciphertext: ciphertext,
+		Nonce:    media.Nonce,
+		Sha256:   media.SHA256,
+		SizeBytes: media.SizeBytes,
+		MimeType: media.MimeType,
+		Filename: media.Filename,
+		Kind:     attachmentKindToProto(media.Kind),
+	}, nil
 }
 
 func (s *Server) StreamEvents(req *messengerv1.StreamEventsRequest, stream messengerv1.MessageService_StreamEventsServer) error {
@@ -925,6 +1107,10 @@ func conversationMemberToProto(member store.ConversationMember) *messengerv1.Con
 }
 
 func messageFromStore(msg store.Message) *messengerv1.Message {
+	attachments := make([]*messengerv1.Attachment, 0, len(msg.Attachments))
+	for _, item := range msg.Attachments {
+		attachments = append(attachments, attachmentToProto(item))
+	}
 	return &messengerv1.Message{
 		MessageId:              msg.ID,
 		ConversationId:         msg.ConversationID,
@@ -941,6 +1127,53 @@ func messageFromStore(msg store.Message) *messengerv1.Message {
 		RecipientSignedPrekeyPublic: msg.RecipientSignedPrekeyPublic,
 		RecipientOneTimePrekeyId: msg.RecipientOneTimePrekeyID,
 		RecipientOneTimePrekeyPublic: msg.RecipientOneTimePrekeyPublic,
+		Attachments:            attachments,
+	}
+}
+
+func attachmentToProto(item store.Attachment) *messengerv1.Attachment {
+	attachment := &messengerv1.Attachment{
+		AttachmentId:        item.AttachmentID,
+		Kind:                attachmentKindToProto(item.Kind),
+		Filename:            item.Filename,
+		MimeType:            item.MimeType,
+		SizeBytes:           item.SizeBytes,
+		MediaId:             item.MediaID,
+		EncryptedDescriptor: item.EncryptedDescriptor,
+		DescriptorNonce:     item.DescriptorNonce,
+		Sha256:              item.SHA256,
+		CiphertextSize:      item.CiphertextSize,
+	}
+	if item.PreviewWidth > 0 || item.PreviewHeight > 0 {
+		attachment.Preview = &messengerv1.AttachmentPreview{
+			Width:  item.PreviewWidth,
+			Height: item.PreviewHeight,
+		}
+	}
+	return attachment
+}
+
+func attachmentKindFromProto(kind messengerv1.AttachmentKind) (store.AttachmentKind, error) {
+	switch kind {
+	case messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE:
+		return store.AttachmentKindImage, nil
+	case messengerv1.AttachmentKind_ATTACHMENT_KIND_VIDEO:
+		return store.AttachmentKindVideo, nil
+	case messengerv1.AttachmentKind_ATTACHMENT_KIND_FILE:
+		return store.AttachmentKindFile, nil
+	default:
+		return "", store.ErrBadInput
+	}
+}
+
+func attachmentKindToProto(kind store.AttachmentKind) messengerv1.AttachmentKind {
+	switch kind {
+	case store.AttachmentKindImage:
+		return messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE
+	case store.AttachmentKindVideo:
+		return messengerv1.AttachmentKind_ATTACHMENT_KIND_VIDEO
+	default:
+		return messengerv1.AttachmentKind_ATTACHMENT_KIND_FILE
 	}
 }
 
@@ -1134,6 +1367,63 @@ func peerFromConversationID(conversationID, username string) (string, bool) {
 		return parts[0], true
 	}
 	return "", false
+}
+
+func defaultMediaRoot() string {
+	if value := strings.TrimSpace(os.Getenv("MEDIA_DIR")); value != "" {
+		return value
+	}
+	return filepath.Join(".", "data", "media")
+}
+
+func newMediaID() string {
+	token := make([]byte, 12)
+	if _, err := rand.Read(token); err != nil {
+		return fmt.Sprintf("media-%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("media-%x", token)
+}
+
+func mediaStorageKey(mediaID string) string {
+	prefix := "xx"
+	if len(mediaID) >= 2 {
+		prefix = mediaID[len(mediaID)-2:]
+	}
+	return filepath.Join(prefix, mediaID+".bin")
+}
+
+func (s *Server) mediaPath(storageKey string) string {
+	return filepath.Join(s.mediaRoot, storageKey)
+}
+
+func (s *Server) writeMediaFile(storageKey string, ciphertext []byte) error {
+	path := s.mediaPath(storageKey)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, ciphertext, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+func (s *Server) readMediaFile(storageKey string) ([]byte, error) {
+	return os.ReadFile(s.mediaPath(storageKey))
+}
+
+func (s *Server) removeMediaFile(storageKey string) error {
+	err := os.Remove(s.mediaPath(storageKey))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) deleteMediaFiles(items []store.MediaObject) {
+	for _, item := range items {
+		_ = s.removeMediaFile(item.StorageKey)
+	}
 }
 
 func randomAvatarHex() string {

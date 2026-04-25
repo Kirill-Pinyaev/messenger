@@ -3,7 +3,7 @@
 /* eslint-disable */
 // @ts-nocheck
 
-import { AcquirePrekeyBundleRequest, AddGroupMembersRequest, Conversation, ConversationKey, CreateGroupConversationRequest, DeleteMessageRequest, GetConversationKeyRequest, GetIdentityKeyRequest, GetIdentityKeysRequest, GetIdentityKeysResponse, GetMessagesRequest, GetMessagesResponse, GetProfileRequest, IdentityKey, LeaveGroupConversationRequest, ListConversationsResponse, LoginRequest, LoginResponse, Message, PrekeyBundle, Profile, PublishIdentityKeyRequest, PublishPrekeyBundleRequest, RegisterRequest, RemoveGroupMemberRequest, SearchMessagesRequest, SearchMessagesResponse, SearchUsersRequest, SearchUsersResponse, SendMessageRequest, ServerEvent, StreamEventsRequest, TransferGroupAdminRequest, UpdateProfileRequest, UpsertConversationKeyRequest } from "./messenger_pb.js";
+import { AcquirePrekeyBundleRequest, AddGroupMembersRequest, Conversation, ConversationKey, CreateGroupConversationRequest, DeleteMessageRequest, GetConversationKeyRequest, GetIdentityKeyRequest, GetIdentityKeysRequest, GetIdentityKeysResponse, GetMediaRequest, GetMediaResponse, GetMessagesRequest, GetMessagesResponse, GetProfileRequest, IdentityKey, LeaveGroupConversationRequest, ListConversationsResponse, LoginRequest, LoginResponse, Message, PrekeyBundle, PrepareMediaUploadRequest, PrepareMediaUploadResponse, Profile, PublishIdentityKeyRequest, PublishPrekeyBundleRequest, RegisterRequest, RemoveGroupMemberRequest, SearchMessagesRequest, SearchMessagesResponse, SearchUsersRequest, SearchUsersResponse, SendMessageRequest, ServerEvent, StreamEventsRequest, TransferGroupAdminRequest, UpdateProfileRequest, UploadMediaRequest, UploadMediaResponse, UpsertConversationKeyRequest } from "./messenger_pb.js";
 import { Empty, MethodKind } from "@bufbuild/protobuf";
 
 /**
@@ -235,6 +235,33 @@ export const MessageService = {
       name: "DeleteMessage",
       I: DeleteMessageRequest,
       O: Empty,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.MessageService.PrepareMediaUpload
+     */
+    prepareMediaUpload: {
+      name: "PrepareMediaUpload",
+      I: PrepareMediaUploadRequest,
+      O: PrepareMediaUploadResponse,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.MessageService.UploadMedia
+     */
+    uploadMedia: {
+      name: "UploadMedia",
+      I: UploadMediaRequest,
+      O: UploadMediaResponse,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.MessageService.GetMedia
+     */
+    getMedia: {
+      name: "GetMedia",
+      I: GetMediaRequest,
+      O: GetMediaResponse,
       kind: MethodKind.Unary,
     },
     /**

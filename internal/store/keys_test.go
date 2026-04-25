@@ -125,3 +125,48 @@ func TestMemoryKeyStorePrekeyBundleAcquisitionConsumesOneTimeKeys(t *testing.T) 
 		t.Fatalf("AcquirePrekeyBundle(third) = %+v", third)
 	}
 }
+
+func TestMemoryKeyStoreDeleteOneTimePrekeysResetsQueue(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryKeyStore()
+	ctx := context.Background()
+
+	if _, err := store.UpsertIdentityKey(ctx, IdentityKey{
+		Username:  "bob",
+		KeyID:     "bob-identity-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{1, 2, 3},
+	}); err != nil {
+		t.Fatalf("UpsertIdentityKey() error = %v", err)
+	}
+	if _, err := store.UpsertSignedPrekey(ctx, SignedPrekey{
+		Username:  "bob",
+		KeyID:     "bob-signed-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{4, 5, 6},
+	}); err != nil {
+		t.Fatalf("UpsertSignedPrekey() error = %v", err)
+	}
+	if err := store.PutOneTimePrekeys(ctx, "bob", []OneTimePrekey{
+		{Username: "bob", KeyID: "bob-otp-old", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{7}},
+	}); err != nil {
+		t.Fatalf("PutOneTimePrekeys(old) error = %v", err)
+	}
+	if err := store.DeleteOneTimePrekeys(ctx, "bob"); err != nil {
+		t.Fatalf("DeleteOneTimePrekeys() error = %v", err)
+	}
+	if err := store.PutOneTimePrekeys(ctx, "bob", []OneTimePrekey{
+		{Username: "bob", KeyID: "bob-otp-new", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{8}},
+	}); err != nil {
+		t.Fatalf("PutOneTimePrekeys(new) error = %v", err)
+	}
+
+	bundle, err := store.AcquirePrekeyBundle(ctx, "bob")
+	if err != nil {
+		t.Fatalf("AcquirePrekeyBundle() error = %v", err)
+	}
+	if bundle.OneTimePrekey.KeyID != "bob-otp-new" {
+		t.Fatalf("AcquirePrekeyBundle() = %+v", bundle)
+	}
+}

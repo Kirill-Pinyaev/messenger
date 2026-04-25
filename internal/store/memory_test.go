@@ -136,3 +136,99 @@ func TestMemoryMessageStoreFlow(t *testing.T) {
 		t.Fatalf("History() after DeleteUser len = %d, want 0", len(history))
 	}
 }
+
+func TestMemoryMessageStoreMediaAndAttachments(t *testing.T) {
+	t.Parallel()
+
+	s := NewMemoryMessageStore()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	media, err := s.PrepareMedia(ctx, MediaObject{
+		MediaID:       "media-1",
+		OwnerUsername: "alice",
+		StorageKey:    "aa/media-1.bin",
+		Filename:      "cat.png",
+		MimeType:      "image/png",
+		Kind:          AttachmentKindImage,
+		SizeBytes:     128,
+		CreatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("PrepareMedia() error = %v", err)
+	}
+	if media.Uploaded {
+		t.Fatalf("PrepareMedia() uploaded = true, want false")
+	}
+
+	media, err = s.CompleteMedia(ctx, MediaObject{
+		MediaID:        "media-1",
+		OwnerUsername:  "alice",
+		StorageKey:     "aa/media-1.bin",
+		Filename:       "cat.png",
+		MimeType:       "image/png",
+		Kind:           AttachmentKindImage,
+		SizeBytes:      128,
+		CiphertextSize: 144,
+		Nonce:          []byte{1, 2, 3},
+		SHA256:         []byte{9, 9, 9},
+		UploadedAt:     now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("CompleteMedia() error = %v", err)
+	}
+	if !media.Uploaded || media.CiphertextSize != 144 {
+		t.Fatalf("CompleteMedia() = %+v", media)
+	}
+
+	msg, err := s.Save(ctx, Message{
+		ConversationID: "alice|bob",
+		From:           "alice",
+		To:             "bob",
+		Attachments: []Attachment{{
+			AttachmentID:        "att-1",
+			Kind:                AttachmentKindImage,
+			Filename:            "cat.png",
+			MimeType:            "image/png",
+			SizeBytes:           128,
+			MediaID:             "media-1",
+			EncryptedDescriptor: []byte{7, 7, 7},
+			DescriptorNonce:     []byte{8, 8, 8},
+			SHA256:              []byte{9, 9, 9},
+			CiphertextSize:      144,
+			PreviewWidth:        320,
+			PreviewHeight:       240,
+		}},
+		TS: now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("Save(attachment-only) error = %v", err)
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("Save(attachment-only) attachments len = %d, want 1", len(msg.Attachments))
+	}
+
+	history, err := s.History(ctx, "alice|bob", 10)
+	if err != nil {
+		t.Fatalf("History() error = %v", err)
+	}
+	if len(history) != 1 || len(history[0].Attachments) != 1 || history[0].Attachments[0].MediaID != "media-1" {
+		t.Fatalf("History() = %+v", history)
+	}
+
+	canAccess, err := s.CanAccessMedia(ctx, "alice", "media-1")
+	if err != nil {
+		t.Fatalf("CanAccessMedia(alice) error = %v", err)
+	}
+	if !canAccess {
+		t.Fatal("CanAccessMedia(alice) = false, want true")
+	}
+
+	mediaItems, err := s.ListMediaByOwner(ctx, "alice")
+	if err != nil {
+		t.Fatalf("ListMediaByOwner() error = %v", err)
+	}
+	if len(mediaItems) != 1 || mediaItems[0].MediaID != "media-1" {
+		t.Fatalf("ListMediaByOwner() = %+v", mediaItems)
+	}
+}

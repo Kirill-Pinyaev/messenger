@@ -870,11 +870,14 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	MessageService_SendMessage_FullMethodName    = "/messenger.v1.MessageService/SendMessage"
-	MessageService_GetMessages_FullMethodName    = "/messenger.v1.MessageService/GetMessages"
-	MessageService_SearchMessages_FullMethodName = "/messenger.v1.MessageService/SearchMessages"
-	MessageService_DeleteMessage_FullMethodName  = "/messenger.v1.MessageService/DeleteMessage"
-	MessageService_StreamEvents_FullMethodName   = "/messenger.v1.MessageService/StreamEvents"
+	MessageService_SendMessage_FullMethodName        = "/messenger.v1.MessageService/SendMessage"
+	MessageService_GetMessages_FullMethodName        = "/messenger.v1.MessageService/GetMessages"
+	MessageService_SearchMessages_FullMethodName     = "/messenger.v1.MessageService/SearchMessages"
+	MessageService_DeleteMessage_FullMethodName      = "/messenger.v1.MessageService/DeleteMessage"
+	MessageService_PrepareMediaUpload_FullMethodName = "/messenger.v1.MessageService/PrepareMediaUpload"
+	MessageService_UploadMedia_FullMethodName        = "/messenger.v1.MessageService/UploadMedia"
+	MessageService_GetMedia_FullMethodName           = "/messenger.v1.MessageService/GetMedia"
+	MessageService_StreamEvents_FullMethodName       = "/messenger.v1.MessageService/StreamEvents"
 )
 
 // MessageServiceClient is the client API for MessageService service.
@@ -885,6 +888,9 @@ type MessageServiceClient interface {
 	GetMessages(ctx context.Context, in *GetMessagesRequest, opts ...grpc.CallOption) (*GetMessagesResponse, error)
 	SearchMessages(ctx context.Context, in *SearchMessagesRequest, opts ...grpc.CallOption) (*SearchMessagesResponse, error)
 	DeleteMessage(ctx context.Context, in *DeleteMessageRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	PrepareMediaUpload(ctx context.Context, in *PrepareMediaUploadRequest, opts ...grpc.CallOption) (*PrepareMediaUploadResponse, error)
+	UploadMedia(ctx context.Context, in *UploadMediaRequest, opts ...grpc.CallOption) (*UploadMediaResponse, error)
+	GetMedia(ctx context.Context, in *GetMediaRequest, opts ...grpc.CallOption) (*GetMediaResponse, error)
 	StreamEvents(ctx context.Context, in *StreamEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ServerEvent], error)
 }
 
@@ -936,6 +942,36 @@ func (c *messageServiceClient) DeleteMessage(ctx context.Context, in *DeleteMess
 	return out, nil
 }
 
+func (c *messageServiceClient) PrepareMediaUpload(ctx context.Context, in *PrepareMediaUploadRequest, opts ...grpc.CallOption) (*PrepareMediaUploadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareMediaUploadResponse)
+	err := c.cc.Invoke(ctx, MessageService_PrepareMediaUpload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *messageServiceClient) UploadMedia(ctx context.Context, in *UploadMediaRequest, opts ...grpc.CallOption) (*UploadMediaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UploadMediaResponse)
+	err := c.cc.Invoke(ctx, MessageService_UploadMedia_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *messageServiceClient) GetMedia(ctx context.Context, in *GetMediaRequest, opts ...grpc.CallOption) (*GetMediaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMediaResponse)
+	err := c.cc.Invoke(ctx, MessageService_GetMedia_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *messageServiceClient) StreamEvents(ctx context.Context, in *StreamEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ServerEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &MessageService_ServiceDesc.Streams[0], MessageService_StreamEvents_FullMethodName, cOpts...)
@@ -963,6 +999,9 @@ type MessageServiceServer interface {
 	GetMessages(context.Context, *GetMessagesRequest) (*GetMessagesResponse, error)
 	SearchMessages(context.Context, *SearchMessagesRequest) (*SearchMessagesResponse, error)
 	DeleteMessage(context.Context, *DeleteMessageRequest) (*emptypb.Empty, error)
+	PrepareMediaUpload(context.Context, *PrepareMediaUploadRequest) (*PrepareMediaUploadResponse, error)
+	UploadMedia(context.Context, *UploadMediaRequest) (*UploadMediaResponse, error)
+	GetMedia(context.Context, *GetMediaRequest) (*GetMediaResponse, error)
 	StreamEvents(*StreamEventsRequest, grpc.ServerStreamingServer[ServerEvent]) error
 	mustEmbedUnimplementedMessageServiceServer()
 }
@@ -985,6 +1024,15 @@ func (UnimplementedMessageServiceServer) SearchMessages(context.Context, *Search
 }
 func (UnimplementedMessageServiceServer) DeleteMessage(context.Context, *DeleteMessageRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteMessage not implemented")
+}
+func (UnimplementedMessageServiceServer) PrepareMediaUpload(context.Context, *PrepareMediaUploadRequest) (*PrepareMediaUploadResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PrepareMediaUpload not implemented")
+}
+func (UnimplementedMessageServiceServer) UploadMedia(context.Context, *UploadMediaRequest) (*UploadMediaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UploadMedia not implemented")
+}
+func (UnimplementedMessageServiceServer) GetMedia(context.Context, *GetMediaRequest) (*GetMediaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetMedia not implemented")
 }
 func (UnimplementedMessageServiceServer) StreamEvents(*StreamEventsRequest, grpc.ServerStreamingServer[ServerEvent]) error {
 	return status.Errorf(codes.Unimplemented, "method StreamEvents not implemented")
@@ -1082,6 +1130,60 @@ func _MessageService_DeleteMessage_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MessageService_PrepareMediaUpload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareMediaUploadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MessageServiceServer).PrepareMediaUpload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MessageService_PrepareMediaUpload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MessageServiceServer).PrepareMediaUpload(ctx, req.(*PrepareMediaUploadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MessageService_UploadMedia_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UploadMediaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MessageServiceServer).UploadMedia(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MessageService_UploadMedia_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MessageServiceServer).UploadMedia(ctx, req.(*UploadMediaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MessageService_GetMedia_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMediaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MessageServiceServer).GetMedia(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MessageService_GetMedia_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MessageServiceServer).GetMedia(ctx, req.(*GetMediaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MessageService_StreamEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StreamEventsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -1115,6 +1217,18 @@ var MessageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteMessage",
 			Handler:    _MessageService_DeleteMessage_Handler,
+		},
+		{
+			MethodName: "PrepareMediaUpload",
+			Handler:    _MessageService_PrepareMediaUpload_Handler,
+		},
+		{
+			MethodName: "UploadMedia",
+			Handler:    _MessageService_UploadMedia_Handler,
+		},
+		{
+			MethodName: "GetMedia",
+			Handler:    _MessageService_GetMedia_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
