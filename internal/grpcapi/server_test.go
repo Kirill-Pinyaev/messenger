@@ -56,6 +56,7 @@ func TestServerAuthAndProfileFlow(t *testing.T) {
 	if _, err := authClient.Login(ctx, &messengerv1.LoginRequest{
 		Username: "ghost",
 		Password: "secret",
+		DeviceId: "web-ghost",
 	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("Login(ghost) code = %v, want %v", status.Code(err), codes.NotFound)
 	}
@@ -63,6 +64,7 @@ func TestServerAuthAndProfileFlow(t *testing.T) {
 	if _, err := authClient.Login(ctx, &messengerv1.LoginRequest{
 		Username: "alice",
 		Password: "bad",
+		DeviceId: "web-alice",
 	}); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("Login(alice,bad) code = %v, want %v", status.Code(err), codes.Unauthenticated)
 	}
@@ -70,6 +72,7 @@ func TestServerAuthAndProfileFlow(t *testing.T) {
 	loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
 		Username: "alice",
 		Password: "secret",
+		DeviceId: "web-alice",
 	})
 	if err != nil {
 		t.Fatalf("Login(alice) error = %v", err)
@@ -146,6 +149,7 @@ func TestServerMessageFlowAndStreaming(t *testing.T) {
 		loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
 			Username: username,
 			Password: "secret",
+			DeviceId: username + "-device",
 		})
 		if err != nil {
 			t.Fatalf("Login(%s) error = %v", username, err)
@@ -279,6 +283,7 @@ func TestServerMediaFlow(t *testing.T) {
 		loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
 			Username: username,
 			Password: "secret",
+			DeviceId: username + "-device",
 		})
 		if err != nil {
 			t.Fatalf("Login(%s) error = %v", username, err)
@@ -380,6 +385,7 @@ func TestServerGroupConversationFlow(t *testing.T) {
 		loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
 			Username: username,
 			Password: "secret",
+			DeviceId: username + "-device",
 		})
 		if err != nil {
 			t.Fatalf("Login(%s) error = %v", username, err)
@@ -662,6 +668,7 @@ func TestServerEncryptedMessageAndKeyFlow(t *testing.T) {
 		loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
 			Username: username,
 			Password: "secret",
+			DeviceId: username + "-device",
 		})
 		if err != nil {
 			t.Fatalf("Login(%s) error = %v", username, err)
@@ -795,6 +802,7 @@ func TestServerEncryptedMessageAndKeyFlow(t *testing.T) {
 			Envelopes: []*messengerv1.ConversationKeyEnvelope{
 				{
 					Username:       "alice",
+					DeviceId:       "alice-device",
 					EncryptedKey:   []byte{1, 2, 3},
 					Nonce:          []byte{4, 5, 6},
 					SenderKeyId:    "alice-key-1",
@@ -802,6 +810,7 @@ func TestServerEncryptedMessageAndKeyFlow(t *testing.T) {
 				},
 				{
 					Username:       "bob",
+					DeviceId:       "bob-device",
 					EncryptedKey:   []byte{7, 8, 9},
 					Nonce:          []byte{3, 2, 1},
 					SenderKeyId:    "alice-key-1",
@@ -843,9 +852,9 @@ func TestServerEncryptedMessageAndKeyFlow(t *testing.T) {
 			Version:   2,
 			Algorithm: "AES-GCM",
 			Envelopes: []*messengerv1.ConversationKeyEnvelope{
-				{Username: "alice", EncryptedKey: []byte{1}, Nonce: []byte{1}, SenderKeyId: "alice-key-1", RecipientKeyId: "alice-key-1"},
-				{Username: "bob", EncryptedKey: []byte{2}, Nonce: []byte{2}, SenderKeyId: "alice-key-1", RecipientKeyId: "bob-key-1"},
-				{Username: "carol", EncryptedKey: []byte{3}, Nonce: []byte{3}, SenderKeyId: "alice-key-1", RecipientKeyId: "carol-key-1"},
+				{Username: "alice", DeviceId: "alice-device", EncryptedKey: []byte{1}, Nonce: []byte{1}, SenderKeyId: "alice-key-1", RecipientKeyId: "alice-key-1"},
+				{Username: "bob", DeviceId: "bob-device", EncryptedKey: []byte{2}, Nonce: []byte{2}, SenderKeyId: "alice-key-1", RecipientKeyId: "bob-key-1"},
+				{Username: "carol", DeviceId: "carol-device", EncryptedKey: []byte{3}, Nonce: []byte{3}, SenderKeyId: "alice-key-1", RecipientKeyId: "carol-key-1"},
 			},
 		},
 	})
@@ -868,6 +877,415 @@ func TestServerEncryptedMessageAndKeyFlow(t *testing.T) {
 	}
 }
 
+func TestServerDirectMessagesProjectPerDevice(t *testing.T) {
+	t.Parallel()
+
+	authClient, userClient, messageClient, cleanup := newTestClients(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	registerUser := func(username string) {
+		t.Helper()
+		if _, err := authClient.Register(ctx, &messengerv1.RegisterRequest{
+			Username: username,
+			Password: "secret",
+		}); err != nil {
+			t.Fatalf("Register(%s) error = %v", username, err)
+		}
+	}
+
+	loginDevice := func(username, deviceID string) context.Context {
+		t.Helper()
+		loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
+			Username: username,
+			Password: "secret",
+			DeviceId: deviceID,
+		})
+		if err != nil {
+			t.Fatalf("Login(%s,%s) error = %v", username, deviceID, err)
+		}
+		return authContext(ctx, loginResp.GetToken())
+	}
+
+	registerUser("alice")
+	registerUser("bob")
+
+	aliceCtx := loginDevice("alice", "alice-web")
+	bobWebCtx := loginDevice("bob", "bob-web")
+	bobPhoneCtx := loginDevice("bob", "bob-phone")
+
+	if _, err := userClient.PublishIdentityKey(aliceCtx, &messengerv1.PublishIdentityKeyRequest{
+		KeyId:     "alice-key-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{1, 2, 3},
+	}); err != nil {
+		t.Fatalf("PublishIdentityKey(alice) error = %v", err)
+	}
+	if _, err := userClient.PublishIdentityKey(bobWebCtx, &messengerv1.PublishIdentityKeyRequest{
+		KeyId:     "bob-web-key-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{4, 5, 6},
+	}); err != nil {
+		t.Fatalf("PublishIdentityKey(bob-web) error = %v", err)
+	}
+	if _, err := userClient.PublishIdentityKey(bobPhoneCtx, &messengerv1.PublishIdentityKeyRequest{
+		KeyId:     "bob-phone-key-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{7, 8, 9},
+	}); err != nil {
+		t.Fatalf("PublishIdentityKey(bob-phone) error = %v", err)
+	}
+
+	if _, err := userClient.PublishPrekeyBundle(bobWebCtx, &messengerv1.PublishPrekeyBundleRequest{
+		SignedPrekeyId:        "bob-web-spk-1",
+		SignedPrekeyAlgorithm: "P256-HKDF-AESGCM",
+		SignedPrekeyPublicKey: []byte{11, 12, 13},
+		OneTimePrekeys: []*messengerv1.OneTimePrekeyUpload{
+			{KeyId: "bob-web-otp-1", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{21, 22, 23}},
+		},
+	}); err != nil {
+		t.Fatalf("PublishPrekeyBundle(bob-web) error = %v", err)
+	}
+	if _, err := userClient.PublishPrekeyBundle(bobPhoneCtx, &messengerv1.PublishPrekeyBundleRequest{
+		SignedPrekeyId:        "bob-phone-spk-1",
+		SignedPrekeyAlgorithm: "P256-HKDF-AESGCM",
+		SignedPrekeyPublicKey: []byte{31, 32, 33},
+		OneTimePrekeys: []*messengerv1.OneTimePrekeyUpload{
+			{KeyId: "bob-phone-otp-1", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{41, 42, 43}},
+		},
+	}); err != nil {
+		t.Fatalf("PublishPrekeyBundle(bob-phone) error = %v", err)
+	}
+
+	bundlesResp, err := userClient.AcquirePrekeyBundles(aliceCtx, &messengerv1.AcquirePrekeyBundlesRequest{
+		Username: "bob",
+	})
+	if err != nil {
+		t.Fatalf("AcquirePrekeyBundles() error = %v", err)
+	}
+	if len(bundlesResp.GetItems()) != 2 {
+		t.Fatalf("AcquirePrekeyBundles() = %+v", bundlesResp.GetItems())
+	}
+
+	if _, err := messageClient.SendMessage(aliceCtx, &messengerv1.SendMessageRequest{
+		To:          "bob",
+		Encrypted:   true,
+		SenderKeyId: "alice-key-1",
+		DirectEnvelopes: []*messengerv1.DirectMessageEnvelope{
+			{
+				TargetUsername:               "bob",
+				TargetDeviceId:               "bob-web",
+				Ciphertext:                   []byte{1, 1, 1},
+				Nonce:                        []byte{9, 9, 0},
+				RecipientSignedPrekeyId:      "bob-web-spk-1",
+				RecipientSignedPrekeyPublic:  []byte{11, 12, 13},
+				RecipientOneTimePrekeyId:     "bob-web-otp-1",
+				RecipientOneTimePrekeyPublic: []byte{21, 22, 23},
+			},
+			{
+				TargetUsername:               "bob",
+				TargetDeviceId:               "bob-phone",
+				Ciphertext:                   []byte{2, 2, 2},
+				Nonce:                        []byte{9, 9, 1},
+				RecipientSignedPrekeyId:      "bob-phone-spk-1",
+				RecipientSignedPrekeyPublic:  []byte{31, 32, 33},
+				RecipientOneTimePrekeyId:     "bob-phone-otp-1",
+				RecipientOneTimePrekeyPublic: []byte{41, 42, 43},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SendMessage(direct multi-device) error = %v", err)
+	}
+
+	webHistory, err := messageClient.GetMessages(bobWebCtx, &messengerv1.GetMessagesRequest{
+		WithUsername: "alice",
+		Limit:        10,
+	})
+	if err != nil {
+		t.Fatalf("GetMessages(bob-web) error = %v", err)
+	}
+	if len(webHistory.GetItems()) != 1 {
+		t.Fatalf("GetMessages(bob-web) = %+v", webHistory.GetItems())
+	}
+	if got := webHistory.GetItems()[0]; got.GetRecipientSignedPrekeyId() != "bob-web-spk-1" || string(got.GetCiphertext()) != string([]byte{1, 1, 1}) {
+		t.Fatalf("GetMessages(bob-web) projected = %+v", got)
+	}
+
+	phoneHistory, err := messageClient.GetMessages(bobPhoneCtx, &messengerv1.GetMessagesRequest{
+		WithUsername: "alice",
+		Limit:        10,
+	})
+	if err != nil {
+		t.Fatalf("GetMessages(bob-phone) error = %v", err)
+	}
+	if len(phoneHistory.GetItems()) != 1 {
+		t.Fatalf("GetMessages(bob-phone) = %+v", phoneHistory.GetItems())
+	}
+	if got := phoneHistory.GetItems()[0]; got.GetRecipientSignedPrekeyId() != "bob-phone-spk-1" || string(got.GetCiphertext()) != string([]byte{2, 2, 2}) {
+		t.Fatalf("GetMessages(bob-phone) projected = %+v", got)
+	}
+
+	aliceHistory, err := messageClient.GetMessages(aliceCtx, &messengerv1.GetMessagesRequest{
+		WithUsername: "bob",
+		Limit:        10,
+	})
+	if err != nil {
+		t.Fatalf("GetMessages(alice-web) error = %v", err)
+	}
+	if len(aliceHistory.GetItems()) != 1 {
+		t.Fatalf("GetMessages(alice-web) = %+v", aliceHistory.GetItems())
+	}
+	if got := aliceHistory.GetItems()[0]; got.GetRecipientSignedPrekeyId() != "bob-web-spk-1" || string(got.GetCiphertext()) != string([]byte{1, 1, 1}) {
+		t.Fatalf("GetMessages(alice-web) sender fallback = %+v", got)
+	}
+}
+
+func TestServerGetMessagesReturnsPlaceholderForDirectHistoryUnavailableOnNewDevice(t *testing.T) {
+	t.Parallel()
+
+	authClient, userClient, messageClient, cleanup := newTestClients(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	registerUser := func(username string) {
+		t.Helper()
+		if _, err := authClient.Register(ctx, &messengerv1.RegisterRequest{
+			Username: username,
+			Password: "secret",
+		}); err != nil {
+			t.Fatalf("Register(%s) error = %v", username, err)
+		}
+	}
+
+	loginDevice := func(username, deviceID string) context.Context {
+		t.Helper()
+		loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
+			Username: username,
+			Password: "secret",
+			DeviceId: deviceID,
+		})
+		if err != nil {
+			t.Fatalf("Login(%s,%s) error = %v", username, deviceID, err)
+		}
+		return authContext(ctx, loginResp.GetToken())
+	}
+
+	registerUser("alice")
+	registerUser("bob")
+
+	aliceWebCtx := loginDevice("alice", "alice-web")
+	aliceAndroidCtx := loginDevice("alice", "alice-android")
+	bobWebCtx := loginDevice("bob", "bob-web")
+
+	if _, err := userClient.PublishIdentityKey(aliceWebCtx, &messengerv1.PublishIdentityKeyRequest{
+		KeyId:     "alice-web-key-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{1, 2, 3},
+	}); err != nil {
+		t.Fatalf("PublishIdentityKey(alice-web) error = %v", err)
+	}
+	if _, err := userClient.PublishIdentityKey(bobWebCtx, &messengerv1.PublishIdentityKeyRequest{
+		KeyId:     "bob-web-key-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{4, 5, 6},
+	}); err != nil {
+		t.Fatalf("PublishIdentityKey(bob-web) error = %v", err)
+	}
+	if _, err := userClient.PublishPrekeyBundle(aliceWebCtx, &messengerv1.PublishPrekeyBundleRequest{
+		SignedPrekeyId:        "alice-web-spk-1",
+		SignedPrekeyAlgorithm: "P256-HKDF-AESGCM",
+		SignedPrekeyPublicKey: []byte{11, 12, 13},
+		OneTimePrekeys: []*messengerv1.OneTimePrekeyUpload{
+			{KeyId: "alice-web-otp-1", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{21, 22, 23}},
+		},
+	}); err != nil {
+		t.Fatalf("PublishPrekeyBundle(alice-web) error = %v", err)
+	}
+	if _, err := userClient.PublishPrekeyBundle(bobWebCtx, &messengerv1.PublishPrekeyBundleRequest{
+		SignedPrekeyId:        "bob-web-spk-1",
+		SignedPrekeyAlgorithm: "P256-HKDF-AESGCM",
+		SignedPrekeyPublicKey: []byte{31, 32, 33},
+		OneTimePrekeys: []*messengerv1.OneTimePrekeyUpload{
+			{KeyId: "bob-web-otp-1", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{41, 42, 43}},
+		},
+	}); err != nil {
+		t.Fatalf("PublishPrekeyBundle(bob-web) error = %v", err)
+	}
+
+	if _, err := messageClient.SendMessage(bobWebCtx, &messengerv1.SendMessageRequest{
+		To:          "alice",
+		Encrypted:   true,
+		SenderKeyId: "bob-web-key-1",
+		DirectEnvelopes: []*messengerv1.DirectMessageEnvelope{
+			{
+				TargetUsername:               "alice",
+				TargetDeviceId:               "alice-web",
+				Ciphertext:                   []byte{1, 1, 1},
+				Nonce:                        []byte{9, 9, 0},
+				RecipientSignedPrekeyId:      "alice-web-spk-1",
+				RecipientSignedPrekeyPublic:  []byte{11, 12, 13},
+				RecipientOneTimePrekeyId:     "alice-web-otp-1",
+				RecipientOneTimePrekeyPublic: []byte{21, 22, 23},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SendMessage(old direct history) error = %v", err)
+	}
+
+	if _, err := userClient.PublishIdentityKey(aliceAndroidCtx, &messengerv1.PublishIdentityKeyRequest{
+		KeyId:     "alice-android-key-1",
+		Algorithm: "P256-HKDF-AESGCM",
+		PublicKey: []byte{7, 8, 9},
+	}); err != nil {
+		t.Fatalf("PublishIdentityKey(alice-android) error = %v", err)
+	}
+	if _, err := userClient.PublishPrekeyBundle(aliceAndroidCtx, &messengerv1.PublishPrekeyBundleRequest{
+		SignedPrekeyId:        "alice-android-spk-1",
+		SignedPrekeyAlgorithm: "P256-HKDF-AESGCM",
+		SignedPrekeyPublicKey: []byte{51, 52, 53},
+		OneTimePrekeys: []*messengerv1.OneTimePrekeyUpload{
+			{KeyId: "alice-android-otp-1", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{61, 62, 63}},
+		},
+	}); err != nil {
+		t.Fatalf("PublishPrekeyBundle(alice-android) error = %v", err)
+	}
+
+	history, err := messageClient.GetMessages(aliceAndroidCtx, &messengerv1.GetMessagesRequest{
+		WithUsername: "bob",
+		Limit:        10,
+	})
+	if err != nil {
+		t.Fatalf("GetMessages(alice-android) error = %v", err)
+	}
+	if len(history.GetItems()) != 1 {
+		t.Fatalf("GetMessages(alice-android) len = %d, want 1", len(history.GetItems()))
+	}
+	if got := history.GetItems()[0]; got.GetText() != "[Сообщение недоступно на этом устройстве]" || got.GetEncrypted() {
+		t.Fatalf("GetMessages(alice-android) placeholder = %+v", got)
+	}
+}
+
+func TestServerDirectAttachmentOnlyMessageProjectsDescriptorPerDevice(t *testing.T) {
+	t.Parallel()
+
+	authClient, _, messageClient, cleanup := newTestClients(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	registerUser := func(username string) {
+		t.Helper()
+		if _, err := authClient.Register(ctx, &messengerv1.RegisterRequest{
+			Username: username,
+			Password: "secret",
+		}); err != nil {
+			t.Fatalf("Register(%s) error = %v", username, err)
+		}
+	}
+
+	loginDevice := func(username, deviceID string) context.Context {
+		t.Helper()
+		loginResp, err := authClient.Login(ctx, &messengerv1.LoginRequest{
+			Username: username,
+			Password: "secret",
+			DeviceId: deviceID,
+		})
+		if err != nil {
+			t.Fatalf("Login(%s,%s) error = %v", username, deviceID, err)
+		}
+		return authContext(ctx, loginResp.GetToken())
+	}
+
+	registerUser("alice")
+	registerUser("bob")
+
+	aliceCtx := loginDevice("alice", "alice-web")
+	bobCtx := loginDevice("bob", "bob-web")
+
+	if _, err := messageClient.PrepareMediaUpload(aliceCtx, &messengerv1.PrepareMediaUploadRequest{
+		Filename:  "image.png",
+		MimeType:  "image/png",
+		SizeBytes: 3,
+		Kind:      messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE,
+	}); err != nil {
+		t.Fatalf("PrepareMediaUpload() error = %v", err)
+	}
+
+	prepared, err := messageClient.PrepareMediaUpload(aliceCtx, &messengerv1.PrepareMediaUploadRequest{
+		Filename:  "image.png",
+		MimeType:  "image/png",
+		SizeBytes: 3,
+		Kind:      messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE,
+	})
+	if err != nil {
+		t.Fatalf("PrepareMediaUpload(image) error = %v", err)
+	}
+	if _, err := messageClient.UploadMedia(aliceCtx, &messengerv1.UploadMediaRequest{
+		MediaId:   prepared.GetMediaId(),
+		Ciphertext: []byte{1, 2, 3},
+		Nonce:     []byte{4, 5, 6},
+		Sha256:    []byte{7, 8, 9},
+		SizeBytes: 3,
+		MimeType:  "image/png",
+		Filename:  "image.png",
+		Kind:      messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE,
+	}); err != nil {
+		t.Fatalf("UploadMedia(image) error = %v", err)
+	}
+
+	if _, err := messageClient.SendMessage(aliceCtx, &messengerv1.SendMessageRequest{
+		To:          "bob",
+		Encrypted:   true,
+		SenderKeyId: "alice-key-1",
+		Attachments: []*messengerv1.Attachment{
+			{
+				AttachmentId: "att-1",
+				Kind:         messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE,
+				Filename:     "image.png",
+				MimeType:     "image/png",
+				SizeBytes:    3,
+				MediaId:      prepared.GetMediaId(),
+				Sha256:       []byte{7, 8, 9},
+				CiphertextSize: 3,
+				DirectEnvelopes: []*messengerv1.AttachmentDirectEnvelope{
+					{
+						TargetUsername:      "bob",
+						TargetDeviceId:      "bob-web",
+						EncryptedDescriptor: []byte{9, 9, 9},
+						DescriptorNonce:     []byte{8, 8, 8},
+						RecipientSignedPrekeyId:     "bob-web-spk-1",
+						RecipientSignedPrekeyPublic: []byte{11, 12, 13},
+						RecipientOneTimePrekeyId:    "bob-web-otp-1",
+						RecipientOneTimePrekeyPublic: []byte{21, 22, 23},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SendMessage(attachment-only direct) error = %v", err)
+	}
+
+	history, err := messageClient.GetMessages(bobCtx, &messengerv1.GetMessagesRequest{
+		WithUsername: "alice",
+		Limit:        10,
+	})
+	if err != nil {
+		t.Fatalf("GetMessages(bob attachment-only) error = %v", err)
+	}
+	if len(history.GetItems()) != 1 || len(history.GetItems()[0].GetAttachments()) != 1 {
+		t.Fatalf("GetMessages(bob attachment-only) = %+v", history.GetItems())
+	}
+	got := history.GetItems()[0].GetAttachments()[0]
+	if string(got.GetEncryptedDescriptor()) != string([]byte{9, 9, 9}) || string(got.GetDescriptorNonce()) != string([]byte{8, 8, 8}) {
+		t.Fatalf("GetMessages(bob attachment-only) projected attachment = %+v", got)
+	}
+	if history.GetItems()[0].GetRecipientSignedPrekeyId() != "bob-web-spk-1" || string(history.GetItems()[0].GetRecipientSignedPrekeyPublic()) != string([]byte{11, 12, 13}) {
+		t.Fatalf("GetMessages(bob attachment-only) projected prekey material = %+v", history.GetItems()[0])
+	}
+}
+
 func newTestClients(t *testing.T) (messengerv1.AuthServiceClient, messengerv1.UserServiceClient, messengerv1.MessageServiceClient, func()) {
 	t.Helper()
 
@@ -875,8 +1293,9 @@ func newTestClients(t *testing.T) (messengerv1.AuthServiceClient, messengerv1.Us
 	msgStore := store.NewMemoryMessageStore()
 	convStore := store.NewMemoryConversationStore()
 	keyStore := store.NewMemoryKeyStore()
+	archiveStore := store.NewMemoryArchiveStore()
 	authSvc := auth.NewService(userStore)
-	apiServer := NewServer(authSvc, userStore, msgStore, convStore, keyStore)
+	apiServer := NewServer(authSvc, userStore, msgStore, convStore, keyStore, archiveStore)
 
 	listener := bufconn.Listen(bufSize)
 	server := grpc.NewServer()

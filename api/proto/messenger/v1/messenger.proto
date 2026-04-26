@@ -3,6 +3,8 @@ syntax = "proto3";
 package messenger.v1;
 
 option go_package = "messenger/gen/messenger/v1;messengerv1";
+option java_package = "com.example.messenger.proto";
+option java_multiple_files = true;
 
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
@@ -20,9 +22,13 @@ service UserService {
   rpc ListConversations(google.protobuf.Empty) returns (ListConversationsResponse);
   rpc PublishIdentityKey(PublishIdentityKeyRequest) returns (IdentityKey);
   rpc PublishPrekeyBundle(PublishPrekeyBundleRequest) returns (PrekeyBundle);
+  rpc InitializeHistoryArchive(InitializeHistoryArchiveRequest) returns (HistoryArchiveHeader);
+  rpc GetHistoryArchiveHeader(google.protobuf.Empty) returns (HistoryArchiveHeader);
+  rpc GetArchivePublicKeys(GetArchivePublicKeysRequest) returns (GetArchivePublicKeysResponse);
   rpc GetIdentityKey(GetIdentityKeyRequest) returns (IdentityKey);
   rpc GetIdentityKeys(GetIdentityKeysRequest) returns (GetIdentityKeysResponse);
   rpc AcquirePrekeyBundle(AcquirePrekeyBundleRequest) returns (PrekeyBundle);
+  rpc AcquirePrekeyBundles(AcquirePrekeyBundlesRequest) returns (AcquirePrekeyBundlesResponse);
   rpc CreateGroupConversation(CreateGroupConversationRequest) returns (Conversation);
   rpc AddGroupMembers(AddGroupMembersRequest) returns (Conversation);
   rpc RemoveGroupMember(RemoveGroupMemberRequest) returns (Conversation);
@@ -37,6 +43,8 @@ service MessageService {
   rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse);
   rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
   rpc DeleteMessage(DeleteMessageRequest) returns (google.protobuf.Empty);
+  rpc AppendHistoryArchiveRecords(AppendHistoryArchiveRecordsRequest) returns (google.protobuf.Empty);
+  rpc ListHistoryArchiveRecords(ListHistoryArchiveRecordsRequest) returns (ListHistoryArchiveRecordsResponse);
   rpc PrepareMediaUpload(PrepareMediaUploadRequest) returns (PrepareMediaUploadResponse);
   rpc UploadMedia(UploadMediaRequest) returns (UploadMediaResponse);
   rpc GetMedia(GetMediaRequest) returns (GetMediaResponse);
@@ -55,10 +63,12 @@ message RegisterRequest {
 message LoginRequest {
   string username = 1;
   string password = 2;
+  string device_id = 3;
 }
 
 message LoginResponse {
   string token = 1;
+  string device_id = 2;
 }
 
 message Profile {
@@ -95,6 +105,7 @@ message IdentityKey {
   string algorithm = 3;
   bytes public_key = 4;
   google.protobuf.Timestamp published_at = 5;
+  string device_id = 6;
 }
 
 message PublishIdentityKeyRequest {
@@ -109,6 +120,7 @@ message SignedPrekey {
   string algorithm = 3;
   bytes public_key = 4;
   google.protobuf.Timestamp published_at = 5;
+  string device_id = 6;
 }
 
 message OneTimePrekey {
@@ -117,6 +129,7 @@ message OneTimePrekey {
   string algorithm = 3;
   bytes public_key = 4;
   google.protobuf.Timestamp published_at = 5;
+  string device_id = 6;
 }
 
 message PrekeyBundle {
@@ -124,6 +137,82 @@ message PrekeyBundle {
   IdentityKey identity_key = 2;
   SignedPrekey signed_prekey = 3;
   OneTimePrekey one_time_prekey = 4;
+  string device_id = 5;
+}
+
+message ArchiveKeyBundle {
+  string username = 1;
+  bytes public_key = 2;
+  bytes encrypted_private_key = 3;
+  bytes kdf_salt = 4;
+  string kdf_params = 5;
+  int32 version = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message InitializeHistoryArchiveRequest {
+  bytes public_key = 1;
+  bytes encrypted_private_key = 2;
+  bytes kdf_salt = 3;
+  string kdf_params = 4;
+  int32 version = 5;
+}
+
+message HistoryArchiveHeader {
+  string username = 1;
+  bytes public_key = 2;
+  bytes encrypted_private_key = 3;
+  bytes kdf_salt = 4;
+  string kdf_params = 5;
+  int32 version = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message GetArchivePublicKeysRequest {
+  repeated string usernames = 1;
+}
+
+message GetArchivePublicKeysResponse {
+  repeated ArchiveKeyBundle items = 1;
+}
+
+enum HistoryArchiveRecordType {
+  HISTORY_ARCHIVE_RECORD_TYPE_UNSPECIFIED = 0;
+  HISTORY_ARCHIVE_RECORD_TYPE_DIRECT_MESSAGE = 1;
+  HISTORY_ARCHIVE_RECORD_TYPE_GROUP_MESSAGE = 2;
+  HISTORY_ARCHIVE_RECORD_TYPE_DIRECT_ATTACHMENT_DESCRIPTOR = 3;
+  HISTORY_ARCHIVE_RECORD_TYPE_GROUP_ATTACHMENT_DESCRIPTOR = 4;
+  HISTORY_ARCHIVE_RECORD_TYPE_GROUP_KEY_VERSION = 5;
+}
+
+message HistoryArchiveRecord {
+  int64 sequence = 1;
+  string record_id = 2;
+  string owner_username = 3;
+  string conversation_id = 4;
+  HistoryArchiveRecordType record_type = 5;
+  int64 message_id = 6;
+  string attachment_id = 7;
+  int32 group_key_version = 8;
+  string sender = 9;
+  google.protobuf.Timestamp created_at = 10;
+  bytes ciphertext = 11;
+  bytes nonce = 12;
+  bytes ephemeral_public_key = 13;
+  int32 archive_key_version = 14;
+}
+
+message AppendHistoryArchiveRecordsRequest {
+  repeated HistoryArchiveRecord items = 1;
+}
+
+message ListHistoryArchiveRecordsRequest {
+  int64 after_sequence = 1;
+  int32 limit = 2;
+}
+
+message ListHistoryArchiveRecordsResponse {
+  repeated HistoryArchiveRecord items = 1;
 }
 
 message OneTimePrekeyUpload {
@@ -143,8 +232,17 @@ message AcquirePrekeyBundleRequest {
   string username = 1;
 }
 
+message AcquirePrekeyBundlesRequest {
+  string username = 1;
+}
+
+message AcquirePrekeyBundlesResponse {
+  repeated PrekeyBundle items = 1;
+}
+
 message GetIdentityKeyRequest {
   string username = 1;
+  string device_id = 2;
 }
 
 message GetIdentityKeysRequest {
@@ -221,6 +319,29 @@ message ConversationKeyEnvelope {
   bytes nonce = 3;
   string sender_key_id = 4;
   string recipient_key_id = 5;
+  string device_id = 6;
+}
+
+message DirectMessageEnvelope {
+  string target_username = 1;
+  string target_device_id = 2;
+  bytes ciphertext = 3;
+  bytes nonce = 4;
+  string recipient_signed_prekey_id = 5;
+  bytes recipient_signed_prekey_public = 6;
+  string recipient_one_time_prekey_id = 7;
+  bytes recipient_one_time_prekey_public = 8;
+}
+
+message AttachmentDirectEnvelope {
+  string target_username = 1;
+  string target_device_id = 2;
+  bytes encrypted_descriptor = 3;
+  bytes descriptor_nonce = 4;
+  string recipient_signed_prekey_id = 5;
+  bytes recipient_signed_prekey_public = 6;
+  string recipient_one_time_prekey_id = 7;
+  bytes recipient_one_time_prekey_public = 8;
 }
 
 message ConversationKey {
@@ -236,6 +357,7 @@ message GroupKeyUpdate {
   int32 version = 1;
   string algorithm = 2;
   repeated ConversationKeyEnvelope envelopes = 3;
+  repeated HistoryArchiveRecord archive_records = 4;
 }
 
 message UpsertConversationKeyRequest {
@@ -243,6 +365,7 @@ message UpsertConversationKeyRequest {
   int32 version = 2;
   string algorithm = 3;
   repeated ConversationKeyEnvelope envelopes = 4;
+  repeated HistoryArchiveRecord archive_records = 5;
 }
 
 message GetConversationKeyRequest {
@@ -267,6 +390,7 @@ message Message {
   string recipient_one_time_prekey_id = 14;
   bytes recipient_one_time_prekey_public = 15;
   repeated Attachment attachments = 16;
+  string sender_device_id = 17;
 }
 
 message SendMessageRequest {
@@ -283,6 +407,8 @@ message SendMessageRequest {
   string recipient_one_time_prekey_id = 11;
   bytes recipient_one_time_prekey_public = 12;
   repeated Attachment attachments = 13;
+  repeated DirectMessageEnvelope direct_envelopes = 14;
+  repeated HistoryArchiveRecord archive_records = 15;
 }
 
 message GetMessagesRequest {
@@ -332,6 +458,7 @@ message Attachment {
   AttachmentPreview preview = 9;
   bytes sha256 = 10;
   int64 ciphertext_size = 11;
+  repeated AttachmentDirectEnvelope direct_envelopes = 12;
 }
 
 message PrepareMediaUploadRequest {

@@ -32,7 +32,7 @@ func TestServiceRegisterLoginDeleteAccount(t *testing.T) {
 		t.Fatalf("salt/hash must be populated: %+v", user)
 	}
 
-	token, err := svc.Login("alice", "secret")
+	token, err := svc.Login("alice", "secret", "web-1")
 	if err != nil {
 		t.Fatalf("Login() error = %v", err)
 	}
@@ -40,9 +40,9 @@ func TestServiceRegisterLoginDeleteAccount(t *testing.T) {
 		t.Fatal("Login() returned empty token")
 	}
 
-	username, ok := svc.UsernameForToken(token)
-	if !ok || username != "alice" {
-		t.Fatalf("UsernameForToken() = (%q, %v), want (%q, true)", username, ok, "alice")
+	session, ok := svc.SessionForToken(token)
+	if !ok || session.Username != "alice" || session.DeviceID != "web-1" {
+		t.Fatalf("SessionForToken() = (%+v, %v), want username=%q device=%q", session, ok, "alice", "web-1")
 	}
 
 	if err := svc.DeleteAccount(context.Background(), "alice"); err != nil {
@@ -51,7 +51,7 @@ func TestServiceRegisterLoginDeleteAccount(t *testing.T) {
 	if _, err := userStore.Get(context.Background(), "alice"); !errors.Is(err, store.ErrUserNotFound) {
 		t.Fatalf("Get() after delete error = %v, want %v", err, store.ErrUserNotFound)
 	}
-	if _, ok := svc.UsernameForToken(token); ok {
+	if _, ok := svc.SessionForToken(token); ok {
 		t.Fatal("token should be invalidated after DeleteAccount()")
 	}
 }
@@ -94,7 +94,7 @@ func TestServiceLoginRejectsInvalidCredentials(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := svc.Login(tt.username, tt.password)
+			_, err := svc.Login(tt.username, tt.password, "web-1")
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Login() error = %v, want %v", err, tt.wantErr)
 			}
@@ -110,13 +110,26 @@ func TestServiceInvalidateToken(t *testing.T) {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	token, err := svc.Login("alice", "secret")
+	token, err := svc.Login("alice", "secret", "web-1")
 	if err != nil {
 		t.Fatalf("Login() error = %v", err)
 	}
 
 	svc.InvalidateToken(token)
-	if _, ok := svc.UsernameForToken(token); ok {
+	if _, ok := svc.SessionForToken(token); ok {
 		t.Fatal("token should be invalid after InvalidateToken()")
+	}
+}
+
+func TestServiceLoginRequiresDeviceID(t *testing.T) {
+	t.Parallel()
+
+	svc := NewService(store.NewMemoryUserStore())
+	if err := svc.Register("alice", "secret", "", "", "", ""); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	if _, err := svc.Login("alice", "secret", ""); !errors.Is(err, ErrBadInput) {
+		t.Fatalf("Login() error = %v, want %v", err, ErrBadInput)
 	}
 }

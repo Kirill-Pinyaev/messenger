@@ -346,6 +346,7 @@ export async function createGroupKeyPackage(conversationId, version, senderIdent
     ));
     envelopes.push({
       username: recipient.username,
+      deviceId: recipient.deviceId,
       encryptedKey,
       nonce,
       senderKeyId: senderIdentity.keyId,

@@ -37,6 +37,29 @@ type Attachment struct {
 	PreviewHeight        int32
 	SHA256               []byte
 	CiphertextSize       int64
+	DirectEnvelopes      []AttachmentDirectEnvelope
+}
+
+type DirectEnvelope struct {
+	TargetUsername               string
+	TargetDeviceID               string
+	Ciphertext                   []byte
+	Nonce                        []byte
+	RecipientSignedPrekeyID      string
+	RecipientSignedPrekeyPublic  []byte
+	RecipientOneTimePrekeyID     string
+	RecipientOneTimePrekeyPublic []byte
+}
+
+type AttachmentDirectEnvelope struct {
+	TargetUsername               string
+	TargetDeviceID               string
+	EncryptedDescriptor          []byte
+	DescriptorNonce              []byte
+	RecipientSignedPrekeyID      string
+	RecipientSignedPrekeyPublic  []byte
+	RecipientOneTimePrekeyID     string
+	RecipientOneTimePrekeyPublic []byte
 }
 
 type MediaObject struct {
@@ -60,6 +83,7 @@ type Message struct {
 	ConversationID string
 	From           string
 	To             string
+	SenderDeviceID string
 	Text           string
 	Ciphertext     []byte
 	Nonce          []byte
@@ -70,6 +94,7 @@ type Message struct {
 	RecipientSignedPrekeyPublic []byte
 	RecipientOneTimePrekeyID    string
 	RecipientOneTimePrekeyPublic []byte
+	DirectEnvelopes []DirectEnvelope
 	Attachments    []Attachment
 	TS             time.Time
 }
@@ -110,7 +135,7 @@ func (s *MemoryMessageStore) Save(_ context.Context, msg Message) (Message, erro
 	if !msg.Encrypted && strings.TrimSpace(msg.Text) == "" && len(msg.Attachments) == 0 {
 		return Message{}, ErrBadInput
 	}
-	if msg.Encrypted && len(msg.Ciphertext) == 0 && strings.TrimSpace(msg.Text) == "" && len(msg.Attachments) == 0 {
+	if msg.Encrypted && len(msg.Ciphertext) == 0 && len(msg.DirectEnvelopes) == 0 && strings.TrimSpace(msg.Text) == "" && len(msg.Attachments) == 0 {
 		return Message{}, ErrBadInput
 	}
 	if msg.Encrypted && len(msg.Ciphertext) > 0 && (len(msg.Nonce) == 0 || msg.SenderKeyID == "") {
@@ -135,6 +160,7 @@ func (s *MemoryMessageStore) Save(_ context.Context, msg Message) (Message, erro
 	msg.Nonce = append([]byte(nil), msg.Nonce...)
 	msg.RecipientSignedPrekeyPublic = append([]byte(nil), msg.RecipientSignedPrekeyPublic...)
 	msg.RecipientOneTimePrekeyPublic = append([]byte(nil), msg.RecipientOneTimePrekeyPublic...)
+	msg.DirectEnvelopes = dedupeDirectEnvelopes(cloneDirectEnvelopes(msg.DirectEnvelopes))
 	msg.Attachments = cloneAttachments(msg.Attachments)
 	s.byConv[msg.ConversationID] = append(s.byConv[msg.ConversationID], msg)
 	return msg, nil
@@ -167,6 +193,7 @@ func (s *MemoryMessageStore) History(_ context.Context, conversationID string, l
 		out[i].Nonce = append([]byte(nil), out[i].Nonce...)
 		out[i].RecipientSignedPrekeyPublic = append([]byte(nil), out[i].RecipientSignedPrekeyPublic...)
 		out[i].RecipientOneTimePrekeyPublic = append([]byte(nil), out[i].RecipientOneTimePrekeyPublic...)
+		out[i].DirectEnvelopes = cloneDirectEnvelopes(out[i].DirectEnvelopes)
 		out[i].Attachments = cloneAttachments(out[i].Attachments)
 	}
 	return out, nil
@@ -272,6 +299,7 @@ func (s *MemoryMessageStore) GetByID(_ context.Context, id int64) (Message, erro
 				msg.Nonce = append([]byte(nil), msg.Nonce...)
 				msg.RecipientSignedPrekeyPublic = append([]byte(nil), msg.RecipientSignedPrekeyPublic...)
 				msg.RecipientOneTimePrekeyPublic = append([]byte(nil), msg.RecipientOneTimePrekeyPublic...)
+				msg.DirectEnvelopes = dedupeDirectEnvelopes(cloneDirectEnvelopes(msg.DirectEnvelopes))
 				msg.Attachments = cloneAttachments(msg.Attachments)
 				return msg, nil
 			}
@@ -411,6 +439,18 @@ func cloneAttachments(items []Attachment) []Attachment {
 	}
 	out := make([]Attachment, 0, len(items))
 	for _, item := range items {
+		encryptedDescriptor := append([]byte(nil), item.EncryptedDescriptor...)
+		if encryptedDescriptor == nil {
+			encryptedDescriptor = []byte{}
+		}
+		descriptorNonce := append([]byte(nil), item.DescriptorNonce...)
+		if descriptorNonce == nil {
+			descriptorNonce = []byte{}
+		}
+		sha256 := append([]byte(nil), item.SHA256...)
+		if sha256 == nil {
+			sha256 = []byte{}
+		}
 		out = append(out, Attachment{
 			AttachmentID:        item.AttachmentID,
 			Kind:                item.Kind,
@@ -418,13 +458,122 @@ func cloneAttachments(items []Attachment) []Attachment {
 			MimeType:            item.MimeType,
 			SizeBytes:           item.SizeBytes,
 			MediaID:             item.MediaID,
-			EncryptedDescriptor: append([]byte(nil), item.EncryptedDescriptor...),
-			DescriptorNonce:     append([]byte(nil), item.DescriptorNonce...),
+			EncryptedDescriptor: encryptedDescriptor,
+			DescriptorNonce:     descriptorNonce,
 			PreviewWidth:        item.PreviewWidth,
 			PreviewHeight:       item.PreviewHeight,
-			SHA256:              append([]byte(nil), item.SHA256...),
+			SHA256:              sha256,
 			CiphertextSize:      item.CiphertextSize,
+			DirectEnvelopes:     dedupeAttachmentDirectEnvelopes(cloneAttachmentDirectEnvelopes(item.DirectEnvelopes)),
 		})
+	}
+	return out
+}
+
+func cloneDirectEnvelopes(items []DirectEnvelope) []DirectEnvelope {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]DirectEnvelope, 0, len(items))
+	for _, item := range items {
+		ciphertext := append([]byte(nil), item.Ciphertext...)
+		if ciphertext == nil {
+			ciphertext = []byte{}
+		}
+		nonce := append([]byte(nil), item.Nonce...)
+		if nonce == nil {
+			nonce = []byte{}
+		}
+		recipientSignedPrekeyPublic := append([]byte(nil), item.RecipientSignedPrekeyPublic...)
+		if recipientSignedPrekeyPublic == nil {
+			recipientSignedPrekeyPublic = []byte{}
+		}
+		recipientOneTimePrekeyPublic := append([]byte(nil), item.RecipientOneTimePrekeyPublic...)
+		if recipientOneTimePrekeyPublic == nil {
+			recipientOneTimePrekeyPublic = []byte{}
+		}
+		out = append(out, DirectEnvelope{
+			TargetUsername:               item.TargetUsername,
+			TargetDeviceID:               item.TargetDeviceID,
+			Ciphertext:                   ciphertext,
+			Nonce:                        nonce,
+			RecipientSignedPrekeyID:      item.RecipientSignedPrekeyID,
+			RecipientSignedPrekeyPublic:  recipientSignedPrekeyPublic,
+			RecipientOneTimePrekeyID:     item.RecipientOneTimePrekeyID,
+			RecipientOneTimePrekeyPublic: recipientOneTimePrekeyPublic,
+		})
+	}
+	return out
+}
+
+func cloneAttachmentDirectEnvelopes(items []AttachmentDirectEnvelope) []AttachmentDirectEnvelope {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]AttachmentDirectEnvelope, 0, len(items))
+	for _, item := range items {
+		encryptedDescriptor := append([]byte(nil), item.EncryptedDescriptor...)
+		if encryptedDescriptor == nil {
+			encryptedDescriptor = []byte{}
+		}
+		descriptorNonce := append([]byte(nil), item.DescriptorNonce...)
+		if descriptorNonce == nil {
+			descriptorNonce = []byte{}
+		}
+		recipientSignedPrekeyPublic := append([]byte(nil), item.RecipientSignedPrekeyPublic...)
+		if recipientSignedPrekeyPublic == nil {
+			recipientSignedPrekeyPublic = []byte{}
+		}
+		recipientOneTimePrekeyPublic := append([]byte(nil), item.RecipientOneTimePrekeyPublic...)
+		if recipientOneTimePrekeyPublic == nil {
+			recipientOneTimePrekeyPublic = []byte{}
+		}
+		out = append(out, AttachmentDirectEnvelope{
+			TargetUsername:               item.TargetUsername,
+			TargetDeviceID:               item.TargetDeviceID,
+			EncryptedDescriptor:          encryptedDescriptor,
+			DescriptorNonce:              descriptorNonce,
+			RecipientSignedPrekeyID:      item.RecipientSignedPrekeyID,
+			RecipientSignedPrekeyPublic:  recipientSignedPrekeyPublic,
+			RecipientOneTimePrekeyID:     item.RecipientOneTimePrekeyID,
+			RecipientOneTimePrekeyPublic: recipientOneTimePrekeyPublic,
+		})
+	}
+	return out
+}
+
+func dedupeDirectEnvelopes(items []DirectEnvelope) []DirectEnvelope {
+	if len(items) <= 1 {
+		return items
+	}
+	seen := make(map[string]int, len(items))
+	out := make([]DirectEnvelope, 0, len(items))
+	for _, item := range items {
+		key := item.TargetUsername + "\x00" + item.TargetDeviceID
+		if idx, ok := seen[key]; ok {
+			out[idx] = item
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, item)
+	}
+	return out
+}
+
+func dedupeAttachmentDirectEnvelopes(items []AttachmentDirectEnvelope) []AttachmentDirectEnvelope {
+	if len(items) <= 1 {
+		return items
+	}
+	seen := make(map[string]int, len(items))
+	out := make([]AttachmentDirectEnvelope, 0, len(items))
+	for _, item := range items {
+		key := item.TargetUsername + "\x00" + item.TargetDeviceID
+		if idx, ok := seen[key]; ok {
+			out[idx] = item
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, item)
 	}
 	return out
 }
@@ -448,7 +597,10 @@ func validateAttachment(item Attachment) error {
 	if item.SizeBytes <= 0 || item.SizeBytes > MaxMediaSizeBytes {
 		return ErrBadInput
 	}
-	if len(item.EncryptedDescriptor) == 0 || len(item.DescriptorNonce) == 0 {
+	if len(item.EncryptedDescriptor) == 0 && len(item.DirectEnvelopes) == 0 {
+		return ErrBadInput
+	}
+	if len(item.EncryptedDescriptor) > 0 && len(item.DescriptorNonce) == 0 {
 		return ErrBadInput
 	}
 	if len(item.SHA256) == 0 || item.CiphertextSize <= 0 {

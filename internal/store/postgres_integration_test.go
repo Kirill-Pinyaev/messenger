@@ -238,6 +238,13 @@ func TestPostgresStoresIntegration(t *testing.T) {
 	if preparedMedia.Uploaded {
 		t.Fatalf("PrepareMedia() = %+v, want uploaded=false", preparedMedia)
 	}
+	gotPreparedMedia, err := messageStore.GetMedia(ctx, "media-1")
+	if err != nil {
+		t.Fatalf("GetMedia(prepared) error = %v", err)
+	}
+	if gotPreparedMedia.MediaID != "media-1" || gotPreparedMedia.Uploaded || !gotPreparedMedia.UploadedAt.IsZero() {
+		t.Fatalf("GetMedia(prepared) = %+v", gotPreparedMedia)
+	}
 
 	uploadedMedia, err := messageStore.CompleteMedia(ctx, MediaObject{
 		MediaID:        "media-1",
@@ -307,11 +314,12 @@ func TestPostgresStoresIntegration(t *testing.T) {
 		t.Fatalf("NewPostgresKeyStore() error = %v", err)
 	}
 
-	identityKey, err := keyStore.UpsertIdentityKey(ctx, IdentityKey{
-		Username:  "alice",
-		KeyID:     "alice-key-1",
-		Algorithm: "P256-HKDF-AESGCM",
-		PublicKey: []byte{1, 2, 3},
+		identityKey, err := keyStore.UpsertIdentityKey(ctx, IdentityKey{
+			Username:  "alice",
+			DeviceID:  "alice-web",
+			KeyID:     "alice-key-1",
+			Algorithm: "P256-HKDF-AESGCM",
+			PublicKey: []byte{1, 2, 3},
 	})
 	if err != nil {
 		t.Fatalf("UpsertIdentityKey() error = %v", err)
@@ -326,11 +334,12 @@ func TestPostgresStoresIntegration(t *testing.T) {
 		Algorithm:      "AES-GCM",
 		CreatedBy:      "alice",
 		Envelopes: []ConversationKeyEnvelope{
-			{
-				Username:       "alice",
-				EncryptedKey:   []byte{1, 1, 1},
-				Nonce:          []byte{2, 2, 2},
-				SenderKeyID:    "alice-key-1",
+				{
+					Username:       "alice",
+					DeviceID:       "alice-web",
+					EncryptedKey:   []byte{1, 1, 1},
+					Nonce:          []byte{2, 2, 2},
+					SenderKeyID:    "alice-key-1",
 				RecipientKeyID: "alice-key-1",
 			},
 		},

@@ -27,12 +27,16 @@ services:
       DATABASE_URL: postgres://messenger:messenger@postgres:5432/messenger?sslmode=disable
       HTTP_ADDR: :8082
       GRPC_ADDR: :9090
+      MEDIA_DIR: /app/data/media
     ports:
       - "8082:8082"
       - "9090:9090"
+    volumes:
+      - media:/app/data/media
     depends_on:
       postgres:
         condition: service_healthy
 
 volumes:
   pgdata:
+  media:

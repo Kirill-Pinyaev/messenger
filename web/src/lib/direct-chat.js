@@ -43,3 +43,37 @@ export function directIdentityErrorMessage(err, username) {
   }
   return rawMessage;
 }
+
+export function currentDevicePrekeyBundle({ username, deviceId, identity }) {
+  return {
+    username,
+    deviceId,
+    signedPrekey: {
+      keyId: identity.signedPrekey.keyId,
+      publicKey: identity.signedPrekey.publicKeyBytes,
+      publicKeyBytes: identity.signedPrekey.publicKeyBytes,
+    },
+  };
+}
+
+export function hasDirectBundleMaterial(bundle) {
+  const signedPublicKey = bundle?.signedPrekey?.publicKey || bundle?.signedPrekey?.publicKeyBytes;
+  return !!(signedPublicKey && signedPublicKey.length > 0);
+}
+
+export function shouldDecryptDirectAsSender({ message, username, identity }) {
+  if (message.from !== username) {
+    return false;
+  }
+  const signedPrekeyMatchesCurrentDevice = message.recipientSignedPrekeyId
+    && message.recipientSignedPrekeyId === identity?.signedPrekey?.keyId;
+  if (signedPrekeyMatchesCurrentDevice) {
+    return false;
+  }
+  const otpMatchesCurrentDevice = !!(message.recipientOneTimePrekeyId
+    && (identity?.oneTimePrekeys || []).some((item) => item.keyId === message.recipientOneTimePrekeyId));
+  if (otpMatchesCurrentDevice) {
+    return false;
+  }
+  return true;
+}

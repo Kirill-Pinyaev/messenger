@@ -275,11 +275,32 @@ button, input, textarea { font-family: inherit; }
 .avatar {
   border-radius: 50%; display: flex; align-items: center; justify-content: center;
   font-weight: 600; color: #fff; letter-spacing: -0.02em;
-  user-select: none; flex-shrink: 0; position: relative;
+  user-select: none; flex-shrink: 0; position: relative; overflow: hidden;
 }
+.avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.avatar-editable { cursor: pointer; }
 .avatar-dot {
   position: absolute; bottom: 1px; right: 1px; border-radius: 50%;
   background: var(--online); border: 2.5px solid var(--sidebar);
+}
+.avatar-picker-btn {
+  border: 1px dashed var(--input-border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.avatar-picker-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--input-bg);
 }
 
 /* ── Chat area ─────────────────────────────────────── */

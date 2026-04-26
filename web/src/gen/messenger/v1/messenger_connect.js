@@ -3,7 +3,7 @@
 /* eslint-disable */
 // @ts-nocheck
 
-import { AcquirePrekeyBundleRequest, AddGroupMembersRequest, Conversation, ConversationKey, CreateGroupConversationRequest, DeleteMessageRequest, GetConversationKeyRequest, GetIdentityKeyRequest, GetIdentityKeysRequest, GetIdentityKeysResponse, GetMediaRequest, GetMediaResponse, GetMessagesRequest, GetMessagesResponse, GetProfileRequest, IdentityKey, LeaveGroupConversationRequest, ListConversationsResponse, LoginRequest, LoginResponse, Message, PrekeyBundle, PrepareMediaUploadRequest, PrepareMediaUploadResponse, Profile, PublishIdentityKeyRequest, PublishPrekeyBundleRequest, RegisterRequest, RemoveGroupMemberRequest, SearchMessagesRequest, SearchMessagesResponse, SearchUsersRequest, SearchUsersResponse, SendMessageRequest, ServerEvent, StreamEventsRequest, TransferGroupAdminRequest, UpdateProfileRequest, UploadMediaRequest, UploadMediaResponse, UpsertConversationKeyRequest } from "./messenger_pb.js";
+import { AcquirePrekeyBundleRequest, AcquirePrekeyBundlesRequest, AcquirePrekeyBundlesResponse, AddGroupMembersRequest, AppendHistoryArchiveRecordsRequest, Conversation, ConversationKey, CreateGroupConversationRequest, DeleteMessageRequest, GetArchivePublicKeysRequest, GetArchivePublicKeysResponse, GetConversationKeyRequest, GetIdentityKeyRequest, GetIdentityKeysRequest, GetIdentityKeysResponse, GetMediaRequest, GetMediaResponse, GetMessagesRequest, GetMessagesResponse, GetProfileRequest, HistoryArchiveHeader, IdentityKey, InitializeHistoryArchiveRequest, LeaveGroupConversationRequest, ListConversationsResponse, ListHistoryArchiveRecordsRequest, ListHistoryArchiveRecordsResponse, LoginRequest, LoginResponse, Message, PrekeyBundle, PrepareMediaUploadRequest, PrepareMediaUploadResponse, Profile, PublishIdentityKeyRequest, PublishPrekeyBundleRequest, RegisterRequest, RemoveGroupMemberRequest, SearchMessagesRequest, SearchMessagesResponse, SearchUsersRequest, SearchUsersResponse, SendMessageRequest, ServerEvent, StreamEventsRequest, TransferGroupAdminRequest, UpdateProfileRequest, UploadMediaRequest, UploadMediaResponse, UpsertConversationKeyRequest } from "./messenger_pb.js";
 import { Empty, MethodKind } from "@bufbuild/protobuf";
 
 /**
@@ -103,6 +103,33 @@ export const UserService = {
       kind: MethodKind.Unary,
     },
     /**
+     * @generated from rpc messenger.v1.UserService.InitializeHistoryArchive
+     */
+    initializeHistoryArchive: {
+      name: "InitializeHistoryArchive",
+      I: InitializeHistoryArchiveRequest,
+      O: HistoryArchiveHeader,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.UserService.GetHistoryArchiveHeader
+     */
+    getHistoryArchiveHeader: {
+      name: "GetHistoryArchiveHeader",
+      I: Empty,
+      O: HistoryArchiveHeader,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.UserService.GetArchivePublicKeys
+     */
+    getArchivePublicKeys: {
+      name: "GetArchivePublicKeys",
+      I: GetArchivePublicKeysRequest,
+      O: GetArchivePublicKeysResponse,
+      kind: MethodKind.Unary,
+    },
+    /**
      * @generated from rpc messenger.v1.UserService.GetIdentityKey
      */
     getIdentityKey: {
@@ -127,6 +154,15 @@ export const UserService = {
       name: "AcquirePrekeyBundle",
       I: AcquirePrekeyBundleRequest,
       O: PrekeyBundle,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.UserService.AcquirePrekeyBundles
+     */
+    acquirePrekeyBundles: {
+      name: "AcquirePrekeyBundles",
+      I: AcquirePrekeyBundlesRequest,
+      O: AcquirePrekeyBundlesResponse,
       kind: MethodKind.Unary,
     },
     /**
@@ -235,6 +271,24 @@ export const MessageService = {
       name: "DeleteMessage",
       I: DeleteMessageRequest,
       O: Empty,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.MessageService.AppendHistoryArchiveRecords
+     */
+    appendHistoryArchiveRecords: {
+      name: "AppendHistoryArchiveRecords",
+      I: AppendHistoryArchiveRecordsRequest,
+      O: Empty,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * @generated from rpc messenger.v1.MessageService.ListHistoryArchiveRecords
+     */
+    listHistoryArchiveRecords: {
+      name: "ListHistoryArchiveRecords",
+      I: ListHistoryArchiveRecordsRequest,
+      O: ListHistoryArchiveRecordsResponse,
       kind: MethodKind.Unary,
     },
     /**

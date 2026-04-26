@@ -198,22 +198,26 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	UserService_GetProfile_FullMethodName              = "/messenger.v1.UserService/GetProfile"
-	UserService_UpdateProfile_FullMethodName           = "/messenger.v1.UserService/UpdateProfile"
-	UserService_SearchUsers_FullMethodName             = "/messenger.v1.UserService/SearchUsers"
-	UserService_ListConversations_FullMethodName       = "/messenger.v1.UserService/ListConversations"
-	UserService_PublishIdentityKey_FullMethodName      = "/messenger.v1.UserService/PublishIdentityKey"
-	UserService_PublishPrekeyBundle_FullMethodName     = "/messenger.v1.UserService/PublishPrekeyBundle"
-	UserService_GetIdentityKey_FullMethodName          = "/messenger.v1.UserService/GetIdentityKey"
-	UserService_GetIdentityKeys_FullMethodName         = "/messenger.v1.UserService/GetIdentityKeys"
-	UserService_AcquirePrekeyBundle_FullMethodName     = "/messenger.v1.UserService/AcquirePrekeyBundle"
-	UserService_CreateGroupConversation_FullMethodName = "/messenger.v1.UserService/CreateGroupConversation"
-	UserService_AddGroupMembers_FullMethodName         = "/messenger.v1.UserService/AddGroupMembers"
-	UserService_RemoveGroupMember_FullMethodName       = "/messenger.v1.UserService/RemoveGroupMember"
-	UserService_LeaveGroupConversation_FullMethodName  = "/messenger.v1.UserService/LeaveGroupConversation"
-	UserService_TransferGroupAdmin_FullMethodName      = "/messenger.v1.UserService/TransferGroupAdmin"
-	UserService_UpsertConversationKey_FullMethodName   = "/messenger.v1.UserService/UpsertConversationKey"
-	UserService_GetConversationKey_FullMethodName      = "/messenger.v1.UserService/GetConversationKey"
+	UserService_GetProfile_FullMethodName               = "/messenger.v1.UserService/GetProfile"
+	UserService_UpdateProfile_FullMethodName            = "/messenger.v1.UserService/UpdateProfile"
+	UserService_SearchUsers_FullMethodName              = "/messenger.v1.UserService/SearchUsers"
+	UserService_ListConversations_FullMethodName        = "/messenger.v1.UserService/ListConversations"
+	UserService_PublishIdentityKey_FullMethodName       = "/messenger.v1.UserService/PublishIdentityKey"
+	UserService_PublishPrekeyBundle_FullMethodName      = "/messenger.v1.UserService/PublishPrekeyBundle"
+	UserService_InitializeHistoryArchive_FullMethodName = "/messenger.v1.UserService/InitializeHistoryArchive"
+	UserService_GetHistoryArchiveHeader_FullMethodName  = "/messenger.v1.UserService/GetHistoryArchiveHeader"
+	UserService_GetArchivePublicKeys_FullMethodName     = "/messenger.v1.UserService/GetArchivePublicKeys"
+	UserService_GetIdentityKey_FullMethodName           = "/messenger.v1.UserService/GetIdentityKey"
+	UserService_GetIdentityKeys_FullMethodName          = "/messenger.v1.UserService/GetIdentityKeys"
+	UserService_AcquirePrekeyBundle_FullMethodName      = "/messenger.v1.UserService/AcquirePrekeyBundle"
+	UserService_AcquirePrekeyBundles_FullMethodName     = "/messenger.v1.UserService/AcquirePrekeyBundles"
+	UserService_CreateGroupConversation_FullMethodName  = "/messenger.v1.UserService/CreateGroupConversation"
+	UserService_AddGroupMembers_FullMethodName          = "/messenger.v1.UserService/AddGroupMembers"
+	UserService_RemoveGroupMember_FullMethodName        = "/messenger.v1.UserService/RemoveGroupMember"
+	UserService_LeaveGroupConversation_FullMethodName   = "/messenger.v1.UserService/LeaveGroupConversation"
+	UserService_TransferGroupAdmin_FullMethodName       = "/messenger.v1.UserService/TransferGroupAdmin"
+	UserService_UpsertConversationKey_FullMethodName    = "/messenger.v1.UserService/UpsertConversationKey"
+	UserService_GetConversationKey_FullMethodName       = "/messenger.v1.UserService/GetConversationKey"
 )
 
 // UserServiceClient is the client API for UserService service.
@@ -226,9 +230,13 @@ type UserServiceClient interface {
 	ListConversations(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListConversationsResponse, error)
 	PublishIdentityKey(ctx context.Context, in *PublishIdentityKeyRequest, opts ...grpc.CallOption) (*IdentityKey, error)
 	PublishPrekeyBundle(ctx context.Context, in *PublishPrekeyBundleRequest, opts ...grpc.CallOption) (*PrekeyBundle, error)
+	InitializeHistoryArchive(ctx context.Context, in *InitializeHistoryArchiveRequest, opts ...grpc.CallOption) (*HistoryArchiveHeader, error)
+	GetHistoryArchiveHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HistoryArchiveHeader, error)
+	GetArchivePublicKeys(ctx context.Context, in *GetArchivePublicKeysRequest, opts ...grpc.CallOption) (*GetArchivePublicKeysResponse, error)
 	GetIdentityKey(ctx context.Context, in *GetIdentityKeyRequest, opts ...grpc.CallOption) (*IdentityKey, error)
 	GetIdentityKeys(ctx context.Context, in *GetIdentityKeysRequest, opts ...grpc.CallOption) (*GetIdentityKeysResponse, error)
 	AcquirePrekeyBundle(ctx context.Context, in *AcquirePrekeyBundleRequest, opts ...grpc.CallOption) (*PrekeyBundle, error)
+	AcquirePrekeyBundles(ctx context.Context, in *AcquirePrekeyBundlesRequest, opts ...grpc.CallOption) (*AcquirePrekeyBundlesResponse, error)
 	CreateGroupConversation(ctx context.Context, in *CreateGroupConversationRequest, opts ...grpc.CallOption) (*Conversation, error)
 	AddGroupMembers(ctx context.Context, in *AddGroupMembersRequest, opts ...grpc.CallOption) (*Conversation, error)
 	RemoveGroupMember(ctx context.Context, in *RemoveGroupMemberRequest, opts ...grpc.CallOption) (*Conversation, error)
@@ -306,6 +314,36 @@ func (c *userServiceClient) PublishPrekeyBundle(ctx context.Context, in *Publish
 	return out, nil
 }
 
+func (c *userServiceClient) InitializeHistoryArchive(ctx context.Context, in *InitializeHistoryArchiveRequest, opts ...grpc.CallOption) (*HistoryArchiveHeader, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HistoryArchiveHeader)
+	err := c.cc.Invoke(ctx, UserService_InitializeHistoryArchive_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) GetHistoryArchiveHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HistoryArchiveHeader, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HistoryArchiveHeader)
+	err := c.cc.Invoke(ctx, UserService_GetHistoryArchiveHeader_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) GetArchivePublicKeys(ctx context.Context, in *GetArchivePublicKeysRequest, opts ...grpc.CallOption) (*GetArchivePublicKeysResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetArchivePublicKeysResponse)
+	err := c.cc.Invoke(ctx, UserService_GetArchivePublicKeys_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *userServiceClient) GetIdentityKey(ctx context.Context, in *GetIdentityKeyRequest, opts ...grpc.CallOption) (*IdentityKey, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(IdentityKey)
@@ -330,6 +368,16 @@ func (c *userServiceClient) AcquirePrekeyBundle(ctx context.Context, in *Acquire
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PrekeyBundle)
 	err := c.cc.Invoke(ctx, UserService_AcquirePrekeyBundle_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) AcquirePrekeyBundles(ctx context.Context, in *AcquirePrekeyBundlesRequest, opts ...grpc.CallOption) (*AcquirePrekeyBundlesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AcquirePrekeyBundlesResponse)
+	err := c.cc.Invoke(ctx, UserService_AcquirePrekeyBundles_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -416,9 +464,13 @@ type UserServiceServer interface {
 	ListConversations(context.Context, *emptypb.Empty) (*ListConversationsResponse, error)
 	PublishIdentityKey(context.Context, *PublishIdentityKeyRequest) (*IdentityKey, error)
 	PublishPrekeyBundle(context.Context, *PublishPrekeyBundleRequest) (*PrekeyBundle, error)
+	InitializeHistoryArchive(context.Context, *InitializeHistoryArchiveRequest) (*HistoryArchiveHeader, error)
+	GetHistoryArchiveHeader(context.Context, *emptypb.Empty) (*HistoryArchiveHeader, error)
+	GetArchivePublicKeys(context.Context, *GetArchivePublicKeysRequest) (*GetArchivePublicKeysResponse, error)
 	GetIdentityKey(context.Context, *GetIdentityKeyRequest) (*IdentityKey, error)
 	GetIdentityKeys(context.Context, *GetIdentityKeysRequest) (*GetIdentityKeysResponse, error)
 	AcquirePrekeyBundle(context.Context, *AcquirePrekeyBundleRequest) (*PrekeyBundle, error)
+	AcquirePrekeyBundles(context.Context, *AcquirePrekeyBundlesRequest) (*AcquirePrekeyBundlesResponse, error)
 	CreateGroupConversation(context.Context, *CreateGroupConversationRequest) (*Conversation, error)
 	AddGroupMembers(context.Context, *AddGroupMembersRequest) (*Conversation, error)
 	RemoveGroupMember(context.Context, *RemoveGroupMemberRequest) (*Conversation, error)
@@ -454,6 +506,15 @@ func (UnimplementedUserServiceServer) PublishIdentityKey(context.Context, *Publi
 func (UnimplementedUserServiceServer) PublishPrekeyBundle(context.Context, *PublishPrekeyBundleRequest) (*PrekeyBundle, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PublishPrekeyBundle not implemented")
 }
+func (UnimplementedUserServiceServer) InitializeHistoryArchive(context.Context, *InitializeHistoryArchiveRequest) (*HistoryArchiveHeader, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InitializeHistoryArchive not implemented")
+}
+func (UnimplementedUserServiceServer) GetHistoryArchiveHeader(context.Context, *emptypb.Empty) (*HistoryArchiveHeader, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetHistoryArchiveHeader not implemented")
+}
+func (UnimplementedUserServiceServer) GetArchivePublicKeys(context.Context, *GetArchivePublicKeysRequest) (*GetArchivePublicKeysResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetArchivePublicKeys not implemented")
+}
 func (UnimplementedUserServiceServer) GetIdentityKey(context.Context, *GetIdentityKeyRequest) (*IdentityKey, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetIdentityKey not implemented")
 }
@@ -462,6 +523,9 @@ func (UnimplementedUserServiceServer) GetIdentityKeys(context.Context, *GetIdent
 }
 func (UnimplementedUserServiceServer) AcquirePrekeyBundle(context.Context, *AcquirePrekeyBundleRequest) (*PrekeyBundle, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AcquirePrekeyBundle not implemented")
+}
+func (UnimplementedUserServiceServer) AcquirePrekeyBundles(context.Context, *AcquirePrekeyBundlesRequest) (*AcquirePrekeyBundlesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AcquirePrekeyBundles not implemented")
 }
 func (UnimplementedUserServiceServer) CreateGroupConversation(context.Context, *CreateGroupConversationRequest) (*Conversation, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateGroupConversation not implemented")
@@ -613,6 +677,60 @@ func _UserService_PublishPrekeyBundle_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UserService_InitializeHistoryArchive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InitializeHistoryArchiveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).InitializeHistoryArchive(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_InitializeHistoryArchive_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).InitializeHistoryArchive(ctx, req.(*InitializeHistoryArchiveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_GetHistoryArchiveHeader_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).GetHistoryArchiveHeader(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_GetHistoryArchiveHeader_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).GetHistoryArchiveHeader(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_GetArchivePublicKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetArchivePublicKeysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).GetArchivePublicKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_GetArchivePublicKeys_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).GetArchivePublicKeys(ctx, req.(*GetArchivePublicKeysRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _UserService_GetIdentityKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetIdentityKeyRequest)
 	if err := dec(in); err != nil {
@@ -663,6 +781,24 @@ func _UserService_AcquirePrekeyBundle_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(UserServiceServer).AcquirePrekeyBundle(ctx, req.(*AcquirePrekeyBundleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_AcquirePrekeyBundles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcquirePrekeyBundlesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).AcquirePrekeyBundles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_AcquirePrekeyBundles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).AcquirePrekeyBundles(ctx, req.(*AcquirePrekeyBundlesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -825,6 +961,18 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _UserService_PublishPrekeyBundle_Handler,
 		},
 		{
+			MethodName: "InitializeHistoryArchive",
+			Handler:    _UserService_InitializeHistoryArchive_Handler,
+		},
+		{
+			MethodName: "GetHistoryArchiveHeader",
+			Handler:    _UserService_GetHistoryArchiveHeader_Handler,
+		},
+		{
+			MethodName: "GetArchivePublicKeys",
+			Handler:    _UserService_GetArchivePublicKeys_Handler,
+		},
+		{
 			MethodName: "GetIdentityKey",
 			Handler:    _UserService_GetIdentityKey_Handler,
 		},
@@ -835,6 +983,10 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AcquirePrekeyBundle",
 			Handler:    _UserService_AcquirePrekeyBundle_Handler,
+		},
+		{
+			MethodName: "AcquirePrekeyBundles",
+			Handler:    _UserService_AcquirePrekeyBundles_Handler,
 		},
 		{
 			MethodName: "CreateGroupConversation",
@@ -870,14 +1022,16 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	MessageService_SendMessage_FullMethodName        = "/messenger.v1.MessageService/SendMessage"
-	MessageService_GetMessages_FullMethodName        = "/messenger.v1.MessageService/GetMessages"
-	MessageService_SearchMessages_FullMethodName     = "/messenger.v1.MessageService/SearchMessages"
-	MessageService_DeleteMessage_FullMethodName      = "/messenger.v1.MessageService/DeleteMessage"
-	MessageService_PrepareMediaUpload_FullMethodName = "/messenger.v1.MessageService/PrepareMediaUpload"
-	MessageService_UploadMedia_FullMethodName        = "/messenger.v1.MessageService/UploadMedia"
-	MessageService_GetMedia_FullMethodName           = "/messenger.v1.MessageService/GetMedia"
-	MessageService_StreamEvents_FullMethodName       = "/messenger.v1.MessageService/StreamEvents"
+	MessageService_SendMessage_FullMethodName                 = "/messenger.v1.MessageService/SendMessage"
+	MessageService_GetMessages_FullMethodName                 = "/messenger.v1.MessageService/GetMessages"
+	MessageService_SearchMessages_FullMethodName              = "/messenger.v1.MessageService/SearchMessages"
+	MessageService_DeleteMessage_FullMethodName               = "/messenger.v1.MessageService/DeleteMessage"
+	MessageService_AppendHistoryArchiveRecords_FullMethodName = "/messenger.v1.MessageService/AppendHistoryArchiveRecords"
+	MessageService_ListHistoryArchiveRecords_FullMethodName   = "/messenger.v1.MessageService/ListHistoryArchiveRecords"
+	MessageService_PrepareMediaUpload_FullMethodName          = "/messenger.v1.MessageService/PrepareMediaUpload"
+	MessageService_UploadMedia_FullMethodName                 = "/messenger.v1.MessageService/UploadMedia"
+	MessageService_GetMedia_FullMethodName                    = "/messenger.v1.MessageService/GetMedia"
+	MessageService_StreamEvents_FullMethodName                = "/messenger.v1.MessageService/StreamEvents"
 )
 
 // MessageServiceClient is the client API for MessageService service.
@@ -888,6 +1042,8 @@ type MessageServiceClient interface {
 	GetMessages(ctx context.Context, in *GetMessagesRequest, opts ...grpc.CallOption) (*GetMessagesResponse, error)
 	SearchMessages(ctx context.Context, in *SearchMessagesRequest, opts ...grpc.CallOption) (*SearchMessagesResponse, error)
 	DeleteMessage(ctx context.Context, in *DeleteMessageRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	AppendHistoryArchiveRecords(ctx context.Context, in *AppendHistoryArchiveRecordsRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ListHistoryArchiveRecords(ctx context.Context, in *ListHistoryArchiveRecordsRequest, opts ...grpc.CallOption) (*ListHistoryArchiveRecordsResponse, error)
 	PrepareMediaUpload(ctx context.Context, in *PrepareMediaUploadRequest, opts ...grpc.CallOption) (*PrepareMediaUploadResponse, error)
 	UploadMedia(ctx context.Context, in *UploadMediaRequest, opts ...grpc.CallOption) (*UploadMediaResponse, error)
 	GetMedia(ctx context.Context, in *GetMediaRequest, opts ...grpc.CallOption) (*GetMediaResponse, error)
@@ -936,6 +1092,26 @@ func (c *messageServiceClient) DeleteMessage(ctx context.Context, in *DeleteMess
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, MessageService_DeleteMessage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *messageServiceClient) AppendHistoryArchiveRecords(ctx context.Context, in *AppendHistoryArchiveRecordsRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MessageService_AppendHistoryArchiveRecords_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *messageServiceClient) ListHistoryArchiveRecords(ctx context.Context, in *ListHistoryArchiveRecordsRequest, opts ...grpc.CallOption) (*ListHistoryArchiveRecordsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListHistoryArchiveRecordsResponse)
+	err := c.cc.Invoke(ctx, MessageService_ListHistoryArchiveRecords_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -999,6 +1175,8 @@ type MessageServiceServer interface {
 	GetMessages(context.Context, *GetMessagesRequest) (*GetMessagesResponse, error)
 	SearchMessages(context.Context, *SearchMessagesRequest) (*SearchMessagesResponse, error)
 	DeleteMessage(context.Context, *DeleteMessageRequest) (*emptypb.Empty, error)
+	AppendHistoryArchiveRecords(context.Context, *AppendHistoryArchiveRecordsRequest) (*emptypb.Empty, error)
+	ListHistoryArchiveRecords(context.Context, *ListHistoryArchiveRecordsRequest) (*ListHistoryArchiveRecordsResponse, error)
 	PrepareMediaUpload(context.Context, *PrepareMediaUploadRequest) (*PrepareMediaUploadResponse, error)
 	UploadMedia(context.Context, *UploadMediaRequest) (*UploadMediaResponse, error)
 	GetMedia(context.Context, *GetMediaRequest) (*GetMediaResponse, error)
@@ -1024,6 +1202,12 @@ func (UnimplementedMessageServiceServer) SearchMessages(context.Context, *Search
 }
 func (UnimplementedMessageServiceServer) DeleteMessage(context.Context, *DeleteMessageRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteMessage not implemented")
+}
+func (UnimplementedMessageServiceServer) AppendHistoryArchiveRecords(context.Context, *AppendHistoryArchiveRecordsRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AppendHistoryArchiveRecords not implemented")
+}
+func (UnimplementedMessageServiceServer) ListHistoryArchiveRecords(context.Context, *ListHistoryArchiveRecordsRequest) (*ListHistoryArchiveRecordsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListHistoryArchiveRecords not implemented")
 }
 func (UnimplementedMessageServiceServer) PrepareMediaUpload(context.Context, *PrepareMediaUploadRequest) (*PrepareMediaUploadResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PrepareMediaUpload not implemented")
@@ -1130,6 +1314,42 @@ func _MessageService_DeleteMessage_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MessageService_AppendHistoryArchiveRecords_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AppendHistoryArchiveRecordsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MessageServiceServer).AppendHistoryArchiveRecords(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MessageService_AppendHistoryArchiveRecords_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MessageServiceServer).AppendHistoryArchiveRecords(ctx, req.(*AppendHistoryArchiveRecordsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MessageService_ListHistoryArchiveRecords_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListHistoryArchiveRecordsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MessageServiceServer).ListHistoryArchiveRecords(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MessageService_ListHistoryArchiveRecords_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MessageServiceServer).ListHistoryArchiveRecords(ctx, req.(*ListHistoryArchiveRecordsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MessageService_PrepareMediaUpload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PrepareMediaUploadRequest)
 	if err := dec(in); err != nil {
@@ -1217,6 +1437,14 @@ var MessageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteMessage",
 			Handler:    _MessageService_DeleteMessage_Handler,
+		},
+		{
+			MethodName: "AppendHistoryArchiveRecords",
+			Handler:    _MessageService_AppendHistoryArchiveRecords_Handler,
+		},
+		{
+			MethodName: "ListHistoryArchiveRecords",
+			Handler:    _MessageService_ListHistoryArchiveRecords_Handler,
 		},
 		{
 			MethodName: "PrepareMediaUpload",

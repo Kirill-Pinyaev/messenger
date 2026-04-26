@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -29,7 +30,7 @@ func (s *PostgresMessageStore) Save(ctx context.Context, msg Message) (Message, 
 	if !msg.Encrypted && strings.TrimSpace(msg.Text) == "" && len(msg.Attachments) == 0 {
 		return Message{}, ErrBadInput
 	}
-	if msg.Encrypted && len(msg.Ciphertext) == 0 && strings.TrimSpace(msg.Text) == "" && len(msg.Attachments) == 0 {
+	if msg.Encrypted && len(msg.Ciphertext) == 0 && len(msg.DirectEnvelopes) == 0 && strings.TrimSpace(msg.Text) == "" && len(msg.Attachments) == 0 {
 		return Message{}, ErrBadInput
 	}
 	if msg.Encrypted && len(msg.Ciphertext) > 0 && (len(msg.Nonce) == 0 || msg.SenderKeyID == "") {
@@ -52,6 +53,8 @@ func (s *PostgresMessageStore) Save(ctx context.Context, msg Message) (Message, 
 	if msg.RecipientOneTimePrekeyPublic == nil {
 		msg.RecipientOneTimePrekeyPublic = []byte{}
 	}
+	msg.DirectEnvelopes = dedupeDirectEnvelopes(cloneDirectEnvelopes(msg.DirectEnvelopes))
+	msg.Attachments = cloneAttachments(msg.Attachments)
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -61,12 +64,12 @@ func (s *PostgresMessageStore) Save(ctx context.Context, msg Message) (Message, 
 
 	err = tx.QueryRow(ctx, `
 		INSERT INTO messages (
-			conversation_id, sender, recipient, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
+			conversation_id, sender, recipient, sender_device_id, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
 			recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public, ts
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING id
-	`, msg.ConversationID, msg.From, msg.To, msg.Text, msg.Ciphertext, msg.Nonce, msg.SenderKeyID, msg.KeyVersion, msg.Encrypted,
+	`, msg.ConversationID, msg.From, msg.To, msg.SenderDeviceID, msg.Text, msg.Ciphertext, msg.Nonce, msg.SenderKeyID, msg.KeyVersion, msg.Encrypted,
 		msg.RecipientSignedPrekeyID, msg.RecipientSignedPrekeyPublic, msg.RecipientOneTimePrekeyID, msg.RecipientOneTimePrekeyPublic, msg.TS).Scan(&msg.ID)
 	if err != nil {
 		return Message{}, err
@@ -91,6 +94,29 @@ func (s *PostgresMessageStore) Save(ctx context.Context, msg Message) (Message, 
 		if tag.RowsAffected() == 0 {
 			return Message{}, ErrBadInput
 		}
+		for _, envelope := range attachment.DirectEnvelopes {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO attachment_descriptor_envelopes (
+					message_id, attachment_id, target_username, target_device_id, encrypted_descriptor, descriptor_nonce,
+					recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public
+				)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			`, msg.ID, attachment.AttachmentID, envelope.TargetUsername, envelope.TargetDeviceID, envelope.EncryptedDescriptor, envelope.DescriptorNonce, envelope.RecipientSignedPrekeyID, envelope.RecipientSignedPrekeyPublic, envelope.RecipientOneTimePrekeyID, envelope.RecipientOneTimePrekeyPublic); err != nil {
+				return Message{}, err
+			}
+		}
+	}
+
+	for _, envelope := range msg.DirectEnvelopes {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO direct_message_envelopes (
+				message_id, target_username, target_device_id, ciphertext, nonce,
+				recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		`, msg.ID, envelope.TargetUsername, envelope.TargetDeviceID, envelope.Ciphertext, envelope.Nonce, envelope.RecipientSignedPrekeyID, envelope.RecipientSignedPrekeyPublic, envelope.RecipientOneTimePrekeyID, envelope.RecipientOneTimePrekeyPublic); err != nil {
+			return Message{}, err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -108,7 +134,7 @@ func (s *PostgresMessageStore) History(ctx context.Context, conversationID strin
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, conversation_id, sender, recipient, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
+		SELECT id, conversation_id, sender, recipient, sender_device_id, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
 		       recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public, ts
 		FROM messages
 		WHERE conversation_id = $1
@@ -123,7 +149,7 @@ func (s *PostgresMessageStore) History(ctx context.Context, conversationID strin
 	var out []Message
 	for rows.Next() {
 		var msg Message
-		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.Text, &msg.Ciphertext, &msg.Nonce, &msg.SenderKeyID, &msg.KeyVersion, &msg.Encrypted,
+		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.SenderDeviceID, &msg.Text, &msg.Ciphertext, &msg.Nonce, &msg.SenderKeyID, &msg.KeyVersion, &msg.Encrypted,
 			&msg.RecipientSignedPrekeyID, &msg.RecipientSignedPrekeyPublic, &msg.RecipientOneTimePrekeyID, &msg.RecipientOneTimePrekeyPublic, &msg.TS); err != nil {
 			return nil, err
 		}
@@ -134,6 +160,11 @@ func (s *PostgresMessageStore) History(ctx context.Context, conversationID strin
 	}
 
 	for i := range out {
+		directEnvelopes, err := s.directEnvelopesForMessage(ctx, out[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].DirectEnvelopes = directEnvelopes
 		attachments, err := s.attachmentsForMessage(ctx, out[i].ID)
 		if err != nil {
 			return nil, err
@@ -206,7 +237,7 @@ func (s *PostgresMessageStore) SearchMessages(ctx context.Context, username, que
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, conversation_id, sender, recipient, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
+		SELECT id, conversation_id, sender, recipient, sender_device_id, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
 		       recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public, ts
 		FROM messages
 		WHERE (sender = $1 OR recipient = $1
@@ -226,7 +257,7 @@ func (s *PostgresMessageStore) SearchMessages(ctx context.Context, username, que
 	var out []Message
 	for rows.Next() {
 		var msg Message
-		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.Text, &msg.Ciphertext, &msg.Nonce, &msg.SenderKeyID, &msg.KeyVersion, &msg.Encrypted,
+		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.SenderDeviceID, &msg.Text, &msg.Ciphertext, &msg.Nonce, &msg.SenderKeyID, &msg.KeyVersion, &msg.Encrypted,
 			&msg.RecipientSignedPrekeyID, &msg.RecipientSignedPrekeyPublic, &msg.RecipientOneTimePrekeyID, &msg.RecipientOneTimePrekeyPublic, &msg.TS); err != nil {
 			return nil, err
 		}
@@ -250,11 +281,11 @@ func (s *PostgresMessageStore) GetByID(ctx context.Context, id int64) (Message, 
 
 	var msg Message
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, conversation_id, sender, recipient, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
+		SELECT id, conversation_id, sender, recipient, sender_device_id, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
 		       recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public, ts
 		FROM messages
 		WHERE id = $1
-	`, id).Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.Text, &msg.Ciphertext, &msg.Nonce, &msg.SenderKeyID, &msg.KeyVersion, &msg.Encrypted,
+	`, id).Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.SenderDeviceID, &msg.Text, &msg.Ciphertext, &msg.Nonce, &msg.SenderKeyID, &msg.KeyVersion, &msg.Encrypted,
 		&msg.RecipientSignedPrekeyID, &msg.RecipientSignedPrekeyPublic, &msg.RecipientOneTimePrekeyID, &msg.RecipientOneTimePrekeyPublic, &msg.TS)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -263,6 +294,10 @@ func (s *PostgresMessageStore) GetByID(ctx context.Context, id int64) (Message, 
 		return Message{}, err
 	}
 	msg.Attachments, err = s.attachmentsForMessage(ctx, msg.ID)
+	if err != nil {
+		return Message{}, err
+	}
+	msg.DirectEnvelopes, err = s.directEnvelopesForMessage(ctx, msg.ID)
 	if err != nil {
 		return Message{}, err
 	}
@@ -352,12 +387,13 @@ func (s *PostgresMessageStore) GetMedia(ctx context.Context, mediaID string) (Me
 
 	var media MediaObject
 	var kind string
+	var uploadedAt pgtype.Timestamptz
 	err := s.pool.QueryRow(ctx, `
 		SELECT media_id, owner_username, storage_key, size_bytes, ciphertext_size, mime_type, filename, kind, nonce, sha256, created_at, uploaded_at, uploaded
 		FROM media_objects
 		WHERE media_id = $1
 	`, mediaID).Scan(&media.MediaID, &media.OwnerUsername, &media.StorageKey, &media.SizeBytes, &media.CiphertextSize, &media.MimeType, &media.Filename, &kind,
-		&media.Nonce, &media.SHA256, &media.CreatedAt, &media.UploadedAt, &media.Uploaded)
+		&media.Nonce, &media.SHA256, &media.CreatedAt, &uploadedAt, &media.Uploaded)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return MediaObject{}, ErrMediaNotFound
@@ -365,6 +401,9 @@ func (s *PostgresMessageStore) GetMedia(ctx context.Context, mediaID string) (Me
 		return MediaObject{}, err
 	}
 	media.Kind = AttachmentKind(kind)
+	if uploadedAt.Valid {
+		media.UploadedAt = uploadedAt.Time
+	}
 	return media, nil
 }
 
@@ -387,11 +426,15 @@ func (s *PostgresMessageStore) ListMediaByOwner(ctx context.Context, username st
 	for rows.Next() {
 		var media MediaObject
 		var kind string
+		var uploadedAt pgtype.Timestamptz
 		if err := rows.Scan(&media.MediaID, &media.OwnerUsername, &media.StorageKey, &media.SizeBytes, &media.CiphertextSize, &media.MimeType, &media.Filename, &kind,
-			&media.Nonce, &media.SHA256, &media.CreatedAt, &media.UploadedAt, &media.Uploaded); err != nil {
+			&media.Nonce, &media.SHA256, &media.CreatedAt, &uploadedAt, &media.Uploaded); err != nil {
 			return nil, err
 		}
 		media.Kind = AttachmentKind(kind)
+		if uploadedAt.Valid {
+			media.UploadedAt = uploadedAt.Time
+		}
 		out = append(out, media)
 	}
 	return out, rows.Err()
@@ -443,6 +486,58 @@ func (s *PostgresMessageStore) attachmentsForMessage(ctx context.Context, messag
 			return nil, err
 		}
 		item.Kind = AttachmentKind(kind)
+		item.DirectEnvelopes, err = s.attachmentDirectEnvelopesForAttachment(ctx, messageID, item.AttachmentID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresMessageStore) directEnvelopesForMessage(ctx context.Context, messageID int64) ([]DirectEnvelope, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT target_username, target_device_id, ciphertext, nonce,
+		       recipient_signed_prekey_id, recipient_signed_prekey_public,
+		       recipient_one_time_prekey_id, recipient_one_time_prekey_public
+		FROM direct_message_envelopes
+		WHERE message_id = $1
+		ORDER BY target_username, target_device_id
+	`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DirectEnvelope
+	for rows.Next() {
+		var item DirectEnvelope
+		if err := rows.Scan(&item.TargetUsername, &item.TargetDeviceID, &item.Ciphertext, &item.Nonce, &item.RecipientSignedPrekeyID, &item.RecipientSignedPrekeyPublic, &item.RecipientOneTimePrekeyID, &item.RecipientOneTimePrekeyPublic); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresMessageStore) attachmentDirectEnvelopesForAttachment(ctx context.Context, messageID int64, attachmentID string) ([]AttachmentDirectEnvelope, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT target_username, target_device_id, encrypted_descriptor, descriptor_nonce,
+		       recipient_signed_prekey_id, recipient_signed_prekey_public,
+		       recipient_one_time_prekey_id, recipient_one_time_prekey_public
+		FROM attachment_descriptor_envelopes
+		WHERE message_id = $1 AND attachment_id = $2
+		ORDER BY target_username, target_device_id
+	`, messageID, attachmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AttachmentDirectEnvelope
+	for rows.Next() {
+		var item AttachmentDirectEnvelope
+		if err := rows.Scan(&item.TargetUsername, &item.TargetDeviceID, &item.EncryptedDescriptor, &item.DescriptorNonce, &item.RecipientSignedPrekeyID, &item.RecipientSignedPrekeyPublic, &item.RecipientOneTimePrekeyID, &item.RecipientOneTimePrekeyPublic); err != nil {
+			return nil, err
+		}
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -455,6 +550,7 @@ func (s *PostgresMessageStore) initSchema(ctx context.Context) error {
 			conversation_id TEXT NOT NULL,
 			sender TEXT NOT NULL,
 			recipient TEXT NOT NULL,
+			sender_device_id TEXT NOT NULL DEFAULT '',
 			body TEXT NOT NULL,
 			ciphertext BYTEA NOT NULL DEFAULT ''::bytea,
 			nonce BYTEA NOT NULL DEFAULT ''::bytea,
@@ -500,6 +596,31 @@ func (s *PostgresMessageStore) initSchema(ctx context.Context) error {
 			ciphertext_size BIGINT NOT NULL DEFAULT 0,
 			PRIMARY KEY (message_id, attachment_id)
 		);
+		CREATE TABLE IF NOT EXISTS direct_message_envelopes (
+			message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+			target_username TEXT NOT NULL,
+			target_device_id TEXT NOT NULL,
+			ciphertext BYTEA NOT NULL,
+			nonce BYTEA NOT NULL,
+			recipient_signed_prekey_id TEXT NOT NULL DEFAULT '',
+			recipient_signed_prekey_public BYTEA NOT NULL DEFAULT ''::bytea,
+			recipient_one_time_prekey_id TEXT NOT NULL DEFAULT '',
+			recipient_one_time_prekey_public BYTEA NOT NULL DEFAULT ''::bytea,
+			PRIMARY KEY (message_id, target_username, target_device_id)
+		);
+		CREATE TABLE IF NOT EXISTS attachment_descriptor_envelopes (
+			message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+			attachment_id TEXT NOT NULL,
+			target_username TEXT NOT NULL,
+			target_device_id TEXT NOT NULL,
+			encrypted_descriptor BYTEA NOT NULL,
+			descriptor_nonce BYTEA NOT NULL,
+			recipient_signed_prekey_id TEXT NOT NULL DEFAULT '',
+			recipient_signed_prekey_public BYTEA NOT NULL DEFAULT ''::bytea,
+			recipient_one_time_prekey_id TEXT NOT NULL DEFAULT '',
+			recipient_one_time_prekey_public BYTEA NOT NULL DEFAULT ''::bytea,
+			PRIMARY KEY (message_id, attachment_id, target_username, target_device_id)
+		);
 
 		CREATE INDEX IF NOT EXISTS messages_conversation_ts_idx
 			ON messages (conversation_id, ts DESC);
@@ -507,8 +628,13 @@ func (s *PostgresMessageStore) initSchema(ctx context.Context) error {
 			ON message_attachments (media_id);
 		CREATE INDEX IF NOT EXISTS media_objects_owner_idx
 			ON media_objects (owner_username);
+		CREATE INDEX IF NOT EXISTS direct_message_envelopes_message_idx
+			ON direct_message_envelopes (message_id);
+		CREATE INDEX IF NOT EXISTS attachment_descriptor_envelopes_message_idx
+			ON attachment_descriptor_envelopes (message_id, attachment_id);
 
 		ALTER TABLE messages
+			ADD COLUMN IF NOT EXISTS sender_device_id TEXT NOT NULL DEFAULT '',
 			ALTER COLUMN body SET DEFAULT '';
 	`)
 	return err

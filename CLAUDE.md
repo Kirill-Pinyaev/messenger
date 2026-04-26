@@ -1,6 +1,6 @@
 # Messenger — контекст проекта для ИИ-агентов
 
-_Последнее обновление: 2026-04-25 (E2EE-вложения для Web и Android добавлены, Этап 6 в процессе)_
+_Последнее обновление: 2026-04-26 (archive bootstrap/server reconciliation исправлен для Web/Android, Web backfill читаемой истории в archive добавлен, Android restore старой истории подключён, proto стабы регенерированы)_
 
 ## Общее
 
@@ -8,7 +8,9 @@ _Последнее обновление: 2026-04-25 (E2EE-вложения дл
 
 Текущий статус разработки:
 - **Этап 5 завершён**: `server + web + E2EE` — полностью реализованы и работают.
-- **Этап 6 в процессе**: Android-клиент написан, собирается, работает flow `login → conversations → chat с E2EE`, включая E2EE-вложения.
+- **Этап 6 завершён**: Android-клиент написан, собирается, работает flow `login → conversations → chat с E2EE`, включая E2EE-вложения и archive restore старой истории при открытии чата.
+- Web и Android теперь при password-login синхронизируют локальный archive identity с серверным `history_archive_header`; если header на сервере отсутствует, он допубликовывается из локального archive key.
+- Web при открытии читаемого чата теперь делает best-effort backfill старых расшифрованных сообщений и attachment descriptor-ов в archive текущего аккаунта, чтобы новые устройства того же пользователя могли восстановить эту историю.
 - при значимых изменениях `proto`, state-модели, key lifecycle и архитектуры нужно обновлять этот файл.
 
 ## Актуальная структура
@@ -46,23 +48,25 @@ messenger/                          ← Go-бэкенд + Web (этот репо
 
 ~/AndroidStudioProjects/messenger/ ← Android-клиент (отдельный путь)
 ├── app/src/main/java/com/example/messenger/
-│   ├── App.kt                   — Application, lazy-init grpc/stores/eventService
+│   ├── App.kt                   — Application, lazy-init grpc/stores/eventService/archiveStore
 │   ├── MainActivity.kt
 │   ├── crypto/
 │   │   ├── E2EE.kt              — P-256 ECDH, HKDF-SHA256, AES-GCM
-│   │   └── IdentityStore.kt     — DataStore-персистентность ключей
+│   │   ├── IdentityStore.kt     — DataStore-персистентность ключей
+│   │   ├── ArchiveE2EE.kt       — PBKDF2 password wrap/unwrap, ECIES для архива
+│   │   └── ArchiveStore.kt      — DataStore-персистентность archive identity
 │   ├── data/
 │   │   ├── GrpcManager.kt       — ManagedChannel, stub factories
 │   │   ├── AuthInterceptor.kt   — Bearer token interceptor
 │   │   ├── TokenStore.kt        — DataStore<Preferences>
 │   │   ├── AuthRepository.kt    — login / register
-│   │   ├── MessengerRepository.kt — все gRPC-вызовы
+│   │   ├── MessengerRepository.kt — все gRPC-вызовы (включая archive RPCs)
 │   │   └── EventService.kt      — фоновый stream событий с auto-reconnect
 │   └── ui/
-│       ├── AppNav.kt            — NavHost: LOGIN → CONVERSATIONS → CHAT
-│       ├── auth/                — LoginScreen, RegisterScreen, AuthViewModel
+│       ├── AppNav.kt            — NavHost: LOGIN → CONVERSATIONS → CHAT (logout НЕ чистит identity)
+│       ├── auth/                — LoginScreen, RegisterScreen, AuthViewModel (archive init при логине)
 │       ├── conversations/       — ConversationListScreen + ViewModel
-│       ├── chat/                — ChatScreen + ChatViewModel (E2EE decrypt + attachments)
+│       ├── chat/                — ChatScreen + ChatViewModel (E2EE decrypt + attachments + archive fan-out + archive restore/merge поверх placeholder-ов)
 │       └── theme/               — Material 3, violet palette
 ├── app/src/main/java/com/example/messenger/proto/  ← сгенерированные gRPC-stubs
 │   └── *.java, *.kt             — proto-классы + Kotlin DSL + gRPC Kotlin coroutine stubs
@@ -119,17 +123,18 @@ Proto-стабы для Android генерируются вручную (protobu
 ```bash
 /home/kot/stydi/diplom/messenger/scripts/protoc.sh \
   -I /home/kot/stydi/diplom/messenger/.tools/protoc-29.3/include \
-  -I app/src/main/proto \
+  -I /home/kot/stydi/diplom/messenger/api/proto \
   --plugin=protoc-gen-grpc-java=/home/kot/AndroidStudioProjects/messenger/.tools/protoc-gen-grpc-java \
   --plugin=protoc-gen-grpc-kotlin=/home/kot/AndroidStudioProjects/messenger/.tools/protoc-gen-grpc-kotlin \
   --java_out=lite:app/src/main/java \
   --kotlin_out=lite:app/src/main/java \
   --grpc-java_out=lite:app/src/main/java \
   --grpc-kotlin_out=lite:app/src/main/java \
-  app/src/main/proto/messenger/v1/messenger.proto
+  /home/kot/stydi/diplom/messenger/api/proto/messenger/v1/messenger.proto
 ```
 
 Флаг `lite` для `--grpc-java_out` обязателен: без него генерируется код с `io.grpc.protobuf.ProtoUtils`, которого нет в `grpc-protobuf-lite`.
+В `messenger.proto` зафиксирован `option java_package = "com.example.messenger.proto"`, чтобы Android-стабы продолжали генерироваться в тот же пакет, который использует приложение.
 
 ## Бэкенд
 
@@ -155,6 +160,7 @@ Proto-стабы для Android генерируются вручную (protobu
   - identity public keys;
   - версии групповых ключей и envelopes;
   - encrypted media blobs на локальном диске (`MEDIA_DIR`, по умолчанию `./data/media`).
+- В `docker-compose.yml` media blobs вынесены в отдельный volume `media:/app/data/media`, поэтому вложения не теряются при пересоздании контейнера сервера.
 
 ### Message model
 
@@ -294,8 +300,16 @@ type Message struct {
 - direct chats:
   - Web публикует identity public key через `PublishIdentityKey`;
   - Web публикует signed prekey + one-time prekeys через `PublishPrekeyBundle`;
-  - отправитель получает bundle получателя через `AcquirePrekeyBundle`;
+  - direct login/session теперь device-aware: каждый клиент логинится со своим `device_id`;
+  - Web хранит локальную identity в `localStorage` по ключу `(username, device_id)`, а не только по `username`; legacy username-only storage мигрируется и при битом/неполном состоянии ключи регенерируются;
+  - отправитель получает bundles получателя через `AcquirePrekeyBundles`;
+  - direct message кодируется как набор `DirectMessageEnvelope`, по одному на устройство получателя и по одному на дополнительные устройства отправителя;
+  - в каждом direct message сервер сохраняет `sender_device_id`; это нужно, чтобы новое устройство того же аккаунта не пыталось дешифровать старую sender-copy, отправленную другим девайсом;
   - plaintext шифруется на клиенте на базе recipient signed/one-time prekeys;
+  - сервер хранит multi-device envelopes сериализованно и при `GetMessages`/`StreamEvents` проектирует сообщение под конкретный `(username, device_id)`;
+  - для текущего отправляющего Web-устройства отдельный self-envelope не обязателен: если точного `(from, device_id)` envelope нет, сервер может отдать sender-copy через recipient-envelope;
+  - если новое устройство открывает старую direct-историю, где на него никогда не шифровались envelopes, `GetMessages` не должен падать с `INTERNAL`; сервер отдаёт placeholder `[Сообщение недоступно на этом устройстве]`;
+  - Web при `live + archive` merge должен подавлять такой placeholder, если уже есть читаемая archived/live запись для той же пары `from/to` и того же timestamp; иначе на новом Web-устройстве после Android-originated истории появляются визуальные дубли `message + placeholder`;
   - сервер получает только ciphertext.
 - group chats:
   - клиент-инициатор генерирует симметричный group key;
@@ -308,9 +322,12 @@ type Message struct {
 
 - blob каждого вложения шифруется отдельным случайным `media key` через AES-GCM;
 - descriptor (`media_key`, hash, mime, filename, size) сериализуется в JSON и отдельно шифруется ключом чата:
-  - direct: direct prekey flow;
+  - direct: multi-device prekey flow через `AttachmentDirectEnvelope`;
   - group: текущий group key;
+- для direct attachment-only messages server-side projection attachment envelopes выполняется независимо от наличия `message.ciphertext`; иначе вложения не смогут расшифроваться, если сообщение содержит только файл без текста;
+- `AttachmentDirectEnvelope` теперь несёт свой `recipient_signed_prekey_id/public` и `recipient_one_time_prekey_id/public`, потому что для attachment-only direct messages у клиента нет message-level prekey metadata, из которого можно было бы вывести descriptor key;
 - изображения рендерятся inline через `objectURL`;
+- по клику изображение открывается в отдельном большом preview-окне с кнопкой скачивания;
 - видео и прочие файлы показываются как download-card;
 - расшифрованные blobs кэшируются только в памяти (`state.mediaCache`).
 
@@ -329,6 +346,13 @@ type Message struct {
 - `handleServerEvent()` для входящих сообщений сначала пытается расшифровать payload, потом обновляет `state.messages`.
 - если у собеседника ещё нет опубликованного `identity key`, прямой чат всё равно открывается в UI, но отправка сообщения останавливается с явным сообщением, что пользователь ещё не входил в зашифрованную версию и должен сначала опубликовать ключ.
 - в шапке чата есть локальный переключатель `E2EE`; если он выключен для конкретного `conversationId`, Web отправляет plaintext через тот же серверный контракт.
+
+### Профиль на Web
+
+- ручное поле `avatarHex` в UI больше не показывается пользователю;
+- при редактировании профиля аватар кликабелен: по нажатию открывается выбор локального изображения;
+- фото сохраняется в `avatarData` и потом используется как основной вид аватара во всём Web UI;
+- старый `avatarHex` оставлен только как fallback для уже существующих профилей без фото.
 
 ## Android-клиент
 
@@ -380,7 +404,8 @@ type Message struct {
 
 `crypto/IdentityStore.kt`:
 - хранит identity state в DataStore как JSON (Base64-encoded key bytes)
-- 1 identity key pair, 1 signed prekey, 10 one-time prekeys
+- identity привязана к конкретному `deviceId`
+- на одно Android-устройство хранится 1 identity key pair, 1 signed prekey, 10 one-time prekeys
 
 Ключевое правило совместимости Web ↔ Android:
 - Все public key bytes — 65-байтовый raw uncompressed P-256 point
@@ -397,30 +422,38 @@ type Message struct {
 ### AuthViewModel flow
 
 При логине:
-1. gRPC `Login` → получить token
-2. `TokenStore.save(token, username)`
-3. `ensureIdentityPublished()`:
-   - если identity не найдена → `generate()` (1 identity + 1 SPK + 10 OTPs)
+1. `TokenStore.loadOrCreateDeviceId()` → получить или создать стабильный `device_id` для этого Android-устройства
+2. gRPC `Login(device_id)` → получить token
+3. `TokenStore.save(token, username, deviceId)`
+4. `ensureIdentityPublished()`:
+   - если identity не найдена или принадлежит другому `(username, deviceId)` → `generate(username, deviceId)` (1 identity + 1 SPK + 10 OTPs)
    - если `published = false` → `PublishIdentityKey` + `PublishPrekeyBundle`
    - сохранить identity с `published = true`
-4. `EventService.start(token)` — запустить фоновый stream
+5. `EventService.start(token)` — запустить фоновый stream
 
 ### ChatViewModel
 
 - `init()` → `loadMessages()` + `collectEvents()`
 - `decodeMessage()` — suspend, inline в `list.map { }` (работает т.к. `map` inline)
 - `decryptGroupMsg()` — group key кэшируется в `groupKeys` Map по `"convId:version"`
-- `decryptDirectMsg()` — sender identity key кэшируется в `senderPubCache`
+- `decryptDirectMsg()` — sender identity key ищется по `(username, sender_key_id)`, а не просто по username
+- для multi-device direct чатов признак `message.from == username` сам по себе недостаточен: если projected envelope адресован текущему signed prekey / local OTP, такое сообщение нужно дешифровать как recipient, даже если оно отправлено с другого устройства того же аккаунта
 - тип дешифровки на Android должен определяться **контекстом открытого чата** (`isGroup`), а не эвристикой по полям `Message`; иначе direct-сообщение можно ошибочно отправить в `GetConversationKey`
 - `collectEvents()` в Android должен фильтровать новые сообщения по `message.conversationId == activeConversationId`
 - для direct `SendMessage` Android **не должен** передавать `conversationId`; сервер трактует непустой `conversationId` как group conversation. Для личного чата нужно передавать только `to`, а server сам соберёт deterministic direct conversation id
 - при публикации нового `signed prekey` сервер сбрасывает старую очередь `one-time prekeys` для пользователя; это защищает Android/Web от рассинхрона после регенерации локальной identity
-- Android при логине должен проверять, что локальная `identity` принадлежит текущему `username`; если нет, генерируется и публикуется новый набор ключей
+- Android при логине должен проверять, что локальная `identity` принадлежит текущему `(username, deviceId)`; если нет, генерируется и публикуется новый набор ключей
+- direct send на Android идёт через `AcquirePrekeyBundles` и строит `DirectMessageEnvelope`/`AttachmentDirectEnvelope` для:
+  - всех устройств получателя;
+  - остальных устройств этого же аккаунта отправителя;
+  - при отсутствии self-envelope для текущего устройства sender-copy должен оставаться читаемым через server-side projection fallback.
+- group envelopes на Android выбираются строго по `(username, device_id)`
 - если Android получает `UNAUTHENTICATED/unauthorized` на post-login экранах, приложение очищает локальную сессию и возвращает пользователя на экран логина
 - ошибки дешифрования логируются через `Log.e("E2EE", ...)` для диагностики
 - Android `ChatViewModel` materialize-ит attachments:
   - `image` → inline bitmap;
   - `video/file` → временный файл в `cacheDir` + открытие через `FileProvider`.
+- в `ChatScreen` на Android изображение по нажатию открывается в полноэкранном dialog preview с кнопкой `Скачать`
 
 ## Группы и права
 
@@ -476,9 +509,11 @@ Gradle sync и сборка через Android Studio (compileSdk 36, minSdk 24)
 ## Текущие ограничения
 
 - E2EE реализован как учебная модель, а не production-grade Signal-протокол.
-- Direct E2EE использует identity key + signed prekey + one-time prekeys, но без полноценного double ratchet и без device-to-device multi-session model.
+- Direct E2EE использует identity key + signed prekey + one-time prekeys и теперь поддерживает device-aware multi-session model через `device_id`, но всё ещё без полноценного double ratchet.
+- Multi-device direct storage пока реализован как сериализованные direct envelopes внутри server-side message payload, а не как отдельная нормализованная таблица per-device ciphertext.
 - Server-side search по encrypted сообщениям не поддерживается.
 - Android UI пока не даёт полноценного группового менеджмента как на Web, но текущий `ChatScreen` уже умеет отправлять E2EE group messages и group attachments при наличии conversation.
-- После logout Android генерирует новые ключи; старые OTP на сервере становятся недостижимыми (сервер их хранит, но private-части уже нет).
+- Logout Android сохраняет device-level identity и archive identity; при следующем логине того же пользователя они переиспользуются и при необходимости повторно публикуют отсутствующий server-side archive header. При логине другого пользователя ключи регенерируются автоматически (проверка `username != storedIdentity.username`).
+- Старые direct/group сообщения, отправленные до появления server-side archive header и ни разу не открытые на устройстве, которое может их расшифровать, не могут появиться на новом устройстве автоматически: для них нужен best-effort backfill с исходного читающего клиента.
 - Android attachment picker сейчас однофайловый за сообщение; Web уже умеет несколько вложений в одном `SendMessage`.
 - На Android inline preview есть только для изображений; видео пока открывается внешним viewer как файл.

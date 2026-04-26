@@ -16,6 +16,7 @@ var (
 
 type IdentityKey struct {
 	Username    string
+	DeviceID    string
 	KeyID       string
 	Algorithm   string
 	PublicKey   []byte
@@ -24,6 +25,7 @@ type IdentityKey struct {
 
 type SignedPrekey struct {
 	Username    string
+	DeviceID    string
 	KeyID       string
 	Algorithm   string
 	PublicKey   []byte
@@ -32,6 +34,7 @@ type SignedPrekey struct {
 
 type OneTimePrekey struct {
 	Username    string
+	DeviceID    string
 	KeyID       string
 	Algorithm   string
 	PublicKey   []byte
@@ -40,6 +43,7 @@ type OneTimePrekey struct {
 
 type PrekeyBundle struct {
 	Username      string
+	DeviceID      string
 	IdentityKey   IdentityKey
 	SignedPrekey  SignedPrekey
 	OneTimePrekey OneTimePrekey
@@ -47,6 +51,7 @@ type PrekeyBundle struct {
 
 type ConversationKeyEnvelope struct {
 	Username       string
+	DeviceID       string
 	EncryptedKey   []byte
 	Nonce          []byte
 	SenderKeyID    string
@@ -64,13 +69,14 @@ type ConversationKey struct {
 
 type KeyStore interface {
 	UpsertIdentityKey(ctx context.Context, key IdentityKey) (IdentityKey, error)
-	GetIdentityKey(ctx context.Context, username string) (IdentityKey, error)
+	GetIdentityKey(ctx context.Context, username, deviceID string) (IdentityKey, error)
 	GetIdentityKeys(ctx context.Context, usernames []string) ([]IdentityKey, error)
 	UpsertSignedPrekey(ctx context.Context, key SignedPrekey) (SignedPrekey, error)
-	GetSignedPrekey(ctx context.Context, username string) (SignedPrekey, error)
-	DeleteOneTimePrekeys(ctx context.Context, username string) error
-	PutOneTimePrekeys(ctx context.Context, username string, keys []OneTimePrekey) error
-	AcquirePrekeyBundle(ctx context.Context, username string) (PrekeyBundle, error)
+	GetSignedPrekey(ctx context.Context, username, deviceID string) (SignedPrekey, error)
+	DeleteOneTimePrekeys(ctx context.Context, username, deviceID string) error
+	PutOneTimePrekeys(ctx context.Context, username, deviceID string, keys []OneTimePrekey) error
+	AcquirePrekeyBundle(ctx context.Context, username, deviceID string) (PrekeyBundle, error)
+	AcquirePrekeyBundles(ctx context.Context, username string) ([]PrekeyBundle, error)
 	UpsertConversationKey(ctx context.Context, key ConversationKey) (ConversationKey, error)
 	GetConversationKey(ctx context.Context, conversationID string, version int32) (ConversationKey, error)
 	DeleteUser(ctx context.Context, username string) error
@@ -93,6 +99,10 @@ func NewMemoryKeyStore() *MemoryKeyStore {
 	}
 }
 
+func keySlot(username, deviceID string) string {
+	return strings.TrimSpace(username) + "|" + strings.TrimSpace(deviceID)
+}
+
 func (s *MemoryKeyStore) UpsertIdentityKey(_ context.Context, key IdentityKey) (IdentityKey, error) {
 	if err := validateIdentityKey(key); err != nil {
 		return IdentityKey{}, err
@@ -105,19 +115,19 @@ func (s *MemoryKeyStore) UpsertIdentityKey(_ context.Context, key IdentityKey) (
 		key.PublishedAt = time.Now().UTC()
 	}
 	key.PublicKey = append([]byte(nil), key.PublicKey...)
-	s.identityKeys[key.Username] = key
+	s.identityKeys[keySlot(key.Username, key.DeviceID)] = key
 	return cloneIdentityKey(key), nil
 }
 
-func (s *MemoryKeyStore) GetIdentityKey(_ context.Context, username string) (IdentityKey, error) {
-	if strings.TrimSpace(username) == "" {
+func (s *MemoryKeyStore) GetIdentityKey(_ context.Context, username, deviceID string) (IdentityKey, error) {
+	if strings.TrimSpace(username) == "" || strings.TrimSpace(deviceID) == "" {
 		return IdentityKey{}, ErrBadInput
 	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	key, ok := s.identityKeys[username]
+	key, ok := s.identityKeys[keySlot(username, deviceID)]
 	if !ok {
 		return IdentityKey{}, ErrIdentityKeyNotFound
 	}
@@ -128,10 +138,16 @@ func (s *MemoryKeyStore) GetIdentityKeys(_ context.Context, usernames []string) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	out := make([]IdentityKey, 0, len(usernames))
+	allowed := make(map[string]struct{}, len(usernames))
 	for _, username := range usernames {
-		key, ok := s.identityKeys[username]
-		if !ok {
+		if trimmed := strings.TrimSpace(username); trimmed != "" {
+			allowed[trimmed] = struct{}{}
+		}
+	}
+
+	out := make([]IdentityKey, 0, len(s.identityKeys))
+	for _, key := range s.identityKeys {
+		if _, ok := allowed[key.Username]; !ok {
 			continue
 		}
 		out = append(out, cloneIdentityKey(key))
@@ -151,35 +167,37 @@ func (s *MemoryKeyStore) UpsertSignedPrekey(_ context.Context, key SignedPrekey)
 		key.PublishedAt = time.Now().UTC()
 	}
 	key.PublicKey = append([]byte(nil), key.PublicKey...)
-	s.signedPrekeys[key.Username] = key
+	s.signedPrekeys[keySlot(key.Username, key.DeviceID)] = key
 	return cloneSignedPrekey(key), nil
 }
 
-func (s *MemoryKeyStore) GetSignedPrekey(_ context.Context, username string) (SignedPrekey, error) {
-	if strings.TrimSpace(username) == "" {
+func (s *MemoryKeyStore) GetSignedPrekey(_ context.Context, username, deviceID string) (SignedPrekey, error) {
+	if strings.TrimSpace(username) == "" || strings.TrimSpace(deviceID) == "" {
 		return SignedPrekey{}, ErrBadInput
 	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	key, ok := s.signedPrekeys[username]
+	key, ok := s.signedPrekeys[keySlot(username, deviceID)]
 	if !ok {
 		return SignedPrekey{}, ErrSignedPrekeyNotFound
 	}
 	return cloneSignedPrekey(key), nil
 }
 
-func (s *MemoryKeyStore) PutOneTimePrekeys(_ context.Context, username string, keys []OneTimePrekey) error {
-	if strings.TrimSpace(username) == "" {
+func (s *MemoryKeyStore) PutOneTimePrekeys(_ context.Context, username, deviceID string, keys []OneTimePrekey) error {
+	if strings.TrimSpace(username) == "" || strings.TrimSpace(deviceID) == "" {
 		return ErrBadInput
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	slot := keySlot(username, deviceID)
 	for _, key := range keys {
 		key.Username = username
+		key.DeviceID = deviceID
 		if err := validateOneTimePrekey(key); err != nil {
 			return err
 		}
@@ -187,49 +205,83 @@ func (s *MemoryKeyStore) PutOneTimePrekeys(_ context.Context, username string, k
 			key.PublishedAt = time.Now().UTC()
 		}
 		key.PublicKey = append([]byte(nil), key.PublicKey...)
-		s.oneTimePrekeys[username] = append(s.oneTimePrekeys[username], key)
+		s.oneTimePrekeys[slot] = append(s.oneTimePrekeys[slot], key)
 	}
 	return nil
 }
 
-func (s *MemoryKeyStore) DeleteOneTimePrekeys(_ context.Context, username string) error {
-	if strings.TrimSpace(username) == "" {
+func (s *MemoryKeyStore) DeleteOneTimePrekeys(_ context.Context, username, deviceID string) error {
+	if strings.TrimSpace(username) == "" || strings.TrimSpace(deviceID) == "" {
 		return ErrBadInput
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.oneTimePrekeys, username)
+	delete(s.oneTimePrekeys, keySlot(username, deviceID))
 	return nil
 }
 
-func (s *MemoryKeyStore) AcquirePrekeyBundle(_ context.Context, username string) (PrekeyBundle, error) {
-	if strings.TrimSpace(username) == "" {
+func (s *MemoryKeyStore) AcquirePrekeyBundle(_ context.Context, username, deviceID string) (PrekeyBundle, error) {
+	if strings.TrimSpace(username) == "" || strings.TrimSpace(deviceID) == "" {
 		return PrekeyBundle{}, ErrBadInput
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	identity, ok := s.identityKeys[username]
+	slot := keySlot(username, deviceID)
+	identity, ok := s.identityKeys[slot]
 	if !ok {
 		return PrekeyBundle{}, ErrIdentityKeyNotFound
 	}
-	signedPrekey, ok := s.signedPrekeys[username]
+	signedPrekey, ok := s.signedPrekeys[slot]
 	if !ok {
 		return PrekeyBundle{}, ErrSignedPrekeyNotFound
 	}
 
 	bundle := PrekeyBundle{
 		Username:     username,
+		DeviceID:     deviceID,
 		IdentityKey:  cloneIdentityKey(identity),
 		SignedPrekey: cloneSignedPrekey(signedPrekey),
 	}
-	if queue := s.oneTimePrekeys[username]; len(queue) > 0 {
+	if queue := s.oneTimePrekeys[slot]; len(queue) > 0 {
 		bundle.OneTimePrekey = cloneOneTimePrekey(queue[0])
-		s.oneTimePrekeys[username] = append([]OneTimePrekey(nil), queue[1:]...)
+		s.oneTimePrekeys[slot] = append([]OneTimePrekey(nil), queue[1:]...)
 	}
 	return bundle, nil
+}
+
+func (s *MemoryKeyStore) AcquirePrekeyBundles(_ context.Context, username string) ([]PrekeyBundle, error) {
+	if strings.TrimSpace(username) == "" {
+		return nil, ErrBadInput
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var out []PrekeyBundle
+	for _, identity := range s.identityKeys {
+		if identity.Username != username {
+			continue
+		}
+		slot := keySlot(identity.Username, identity.DeviceID)
+		signedPrekey, ok := s.signedPrekeys[slot]
+		if !ok {
+			continue
+		}
+		bundle := PrekeyBundle{
+			Username:     username,
+			DeviceID:     identity.DeviceID,
+			IdentityKey:  cloneIdentityKey(identity),
+			SignedPrekey: cloneSignedPrekey(signedPrekey),
+		}
+		if queue := s.oneTimePrekeys[slot]; len(queue) > 0 {
+			bundle.OneTimePrekey = cloneOneTimePrekey(queue[0])
+		}
+		out = append(out, bundle)
+	}
+	return out, nil
 }
 
 func (s *MemoryKeyStore) UpsertConversationKey(_ context.Context, key ConversationKey) (ConversationKey, error) {
@@ -287,9 +339,21 @@ func (s *MemoryKeyStore) DeleteUser(_ context.Context, username string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.identityKeys, username)
-	delete(s.signedPrekeys, username)
-	delete(s.oneTimePrekeys, username)
+	for slot, key := range s.identityKeys {
+		if key.Username == username {
+			delete(s.identityKeys, slot)
+		}
+	}
+	for slot, key := range s.signedPrekeys {
+		if key.Username == username {
+			delete(s.signedPrekeys, slot)
+		}
+	}
+	for slot, queue := range s.oneTimePrekeys {
+		if len(queue) > 0 && queue[0].Username == username {
+			delete(s.oneTimePrekeys, slot)
+		}
+	}
 	for conversationID, versions := range s.conversationKeys {
 		for version, key := range versions {
 			filtered := make([]ConversationKeyEnvelope, 0, len(key.Envelopes))
@@ -308,9 +372,10 @@ func (s *MemoryKeyStore) DeleteUser(_ context.Context, username string) error {
 
 func validateIdentityKey(key IdentityKey) error {
 	key.Username = strings.TrimSpace(key.Username)
+	key.DeviceID = strings.TrimSpace(key.DeviceID)
 	key.KeyID = strings.TrimSpace(key.KeyID)
 	key.Algorithm = strings.TrimSpace(key.Algorithm)
-	if key.Username == "" || key.KeyID == "" || key.Algorithm == "" || len(key.PublicKey) == 0 {
+	if key.Username == "" || key.DeviceID == "" || key.KeyID == "" || key.Algorithm == "" || len(key.PublicKey) == 0 {
 		return ErrBadInput
 	}
 	return nil
@@ -318,9 +383,10 @@ func validateIdentityKey(key IdentityKey) error {
 
 func validateSignedPrekey(key SignedPrekey) error {
 	key.Username = strings.TrimSpace(key.Username)
+	key.DeviceID = strings.TrimSpace(key.DeviceID)
 	key.KeyID = strings.TrimSpace(key.KeyID)
 	key.Algorithm = strings.TrimSpace(key.Algorithm)
-	if key.Username == "" || key.KeyID == "" || key.Algorithm == "" || len(key.PublicKey) == 0 {
+	if key.Username == "" || key.DeviceID == "" || key.KeyID == "" || key.Algorithm == "" || len(key.PublicKey) == 0 {
 		return ErrBadInput
 	}
 	return nil
@@ -328,9 +394,10 @@ func validateSignedPrekey(key SignedPrekey) error {
 
 func validateOneTimePrekey(key OneTimePrekey) error {
 	key.Username = strings.TrimSpace(key.Username)
+	key.DeviceID = strings.TrimSpace(key.DeviceID)
 	key.KeyID = strings.TrimSpace(key.KeyID)
 	key.Algorithm = strings.TrimSpace(key.Algorithm)
-	if key.Username == "" || key.KeyID == "" || key.Algorithm == "" || len(key.PublicKey) == 0 {
+	if key.Username == "" || key.DeviceID == "" || key.KeyID == "" || key.Algorithm == "" || len(key.PublicKey) == 0 {
 		return ErrBadInput
 	}
 	return nil
@@ -344,7 +411,8 @@ func validateConversationKey(key ConversationKey) error {
 		return ErrBadInput
 	}
 	for _, envelope := range key.Envelopes {
-		if strings.TrimSpace(envelope.Username) == "" || len(envelope.EncryptedKey) == 0 || len(envelope.Nonce) == 0 ||
+		if strings.TrimSpace(envelope.Username) == "" || strings.TrimSpace(envelope.DeviceID) == "" ||
+			len(envelope.EncryptedKey) == 0 || len(envelope.Nonce) == 0 ||
 			strings.TrimSpace(envelope.SenderKeyID) == "" || strings.TrimSpace(envelope.RecipientKeyID) == "" {
 			return ErrBadInput
 		}

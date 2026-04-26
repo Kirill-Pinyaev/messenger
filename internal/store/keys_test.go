@@ -13,6 +13,7 @@ func TestMemoryKeyStoreIdentityAndConversationKeys(t *testing.T) {
 
 	identity, err := store.UpsertIdentityKey(ctx, IdentityKey{
 		Username:  "alice",
+		DeviceID:  "web",
 		KeyID:     "alice-key-1",
 		Algorithm: "P256-HKDF-AESGCM",
 		PublicKey: []byte{1, 2, 3},
@@ -24,7 +25,7 @@ func TestMemoryKeyStoreIdentityAndConversationKeys(t *testing.T) {
 		t.Fatalf("UpsertIdentityKey() = %+v", identity)
 	}
 
-	gotIdentity, err := store.GetIdentityKey(ctx, "alice")
+	gotIdentity, err := store.GetIdentityKey(ctx, "alice", "web")
 	if err != nil {
 		t.Fatalf("GetIdentityKey() error = %v", err)
 	}
@@ -40,6 +41,7 @@ func TestMemoryKeyStoreIdentityAndConversationKeys(t *testing.T) {
 		Envelopes: []ConversationKeyEnvelope{
 			{
 				Username:       "alice",
+				DeviceID:       "web",
 				EncryptedKey:   []byte{9, 9, 9},
 				Nonce:          []byte{7, 7, 7},
 				SenderKeyID:    "alice-key-1",
@@ -47,6 +49,7 @@ func TestMemoryKeyStoreIdentityAndConversationKeys(t *testing.T) {
 			},
 			{
 				Username:       "bob",
+				DeviceID:       "phone",
 				EncryptedKey:   []byte{8, 8, 8},
 				Nonce:          []byte{6, 6, 6},
 				SenderKeyID:    "alice-key-1",
@@ -78,6 +81,7 @@ func TestMemoryKeyStorePrekeyBundleAcquisitionConsumesOneTimeKeys(t *testing.T) 
 
 	if _, err := store.UpsertIdentityKey(ctx, IdentityKey{
 		Username:  "bob",
+		DeviceID:  "phone",
 		KeyID:     "bob-identity-1",
 		Algorithm: "P256-HKDF-AESGCM",
 		PublicKey: []byte{1, 2, 3},
@@ -87,6 +91,7 @@ func TestMemoryKeyStorePrekeyBundleAcquisitionConsumesOneTimeKeys(t *testing.T) 
 
 	if _, err := store.UpsertSignedPrekey(ctx, SignedPrekey{
 		Username:  "bob",
+		DeviceID:  "phone",
 		KeyID:     "bob-signed-1",
 		Algorithm: "P256-HKDF-AESGCM",
 		PublicKey: []byte{4, 5, 6},
@@ -94,14 +99,14 @@ func TestMemoryKeyStorePrekeyBundleAcquisitionConsumesOneTimeKeys(t *testing.T) 
 		t.Fatalf("UpsertSignedPrekey() error = %v", err)
 	}
 
-	if err := store.PutOneTimePrekeys(ctx, "bob", []OneTimePrekey{
-		{Username: "bob", KeyID: "bob-otp-1", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{7, 8, 9}},
-		{Username: "bob", KeyID: "bob-otp-2", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{10, 11, 12}},
+	if err := store.PutOneTimePrekeys(ctx, "bob", "phone", []OneTimePrekey{
+		{Username: "bob", DeviceID: "phone", KeyID: "bob-otp-1", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{7, 8, 9}},
+		{Username: "bob", DeviceID: "phone", KeyID: "bob-otp-2", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{10, 11, 12}},
 	}); err != nil {
 		t.Fatalf("PutOneTimePrekeys() error = %v", err)
 	}
 
-	first, err := store.AcquirePrekeyBundle(ctx, "bob")
+	first, err := store.AcquirePrekeyBundle(ctx, "bob", "phone")
 	if err != nil {
 		t.Fatalf("AcquirePrekeyBundle(first) error = %v", err)
 	}
@@ -109,7 +114,7 @@ func TestMemoryKeyStorePrekeyBundleAcquisitionConsumesOneTimeKeys(t *testing.T) 
 		t.Fatalf("AcquirePrekeyBundle(first) = %+v", first)
 	}
 
-	second, err := store.AcquirePrekeyBundle(ctx, "bob")
+	second, err := store.AcquirePrekeyBundle(ctx, "bob", "phone")
 	if err != nil {
 		t.Fatalf("AcquirePrekeyBundle(second) error = %v", err)
 	}
@@ -117,7 +122,7 @@ func TestMemoryKeyStorePrekeyBundleAcquisitionConsumesOneTimeKeys(t *testing.T) 
 		t.Fatalf("AcquirePrekeyBundle(second) = %+v", second)
 	}
 
-	third, err := store.AcquirePrekeyBundle(ctx, "bob")
+	third, err := store.AcquirePrekeyBundle(ctx, "bob", "phone")
 	if err != nil {
 		t.Fatalf("AcquirePrekeyBundle(third) error = %v", err)
 	}
@@ -134,6 +139,7 @@ func TestMemoryKeyStoreDeleteOneTimePrekeysResetsQueue(t *testing.T) {
 
 	if _, err := store.UpsertIdentityKey(ctx, IdentityKey{
 		Username:  "bob",
+		DeviceID:  "phone",
 		KeyID:     "bob-identity-1",
 		Algorithm: "P256-HKDF-AESGCM",
 		PublicKey: []byte{1, 2, 3},
@@ -142,31 +148,68 @@ func TestMemoryKeyStoreDeleteOneTimePrekeysResetsQueue(t *testing.T) {
 	}
 	if _, err := store.UpsertSignedPrekey(ctx, SignedPrekey{
 		Username:  "bob",
+		DeviceID:  "phone",
 		KeyID:     "bob-signed-1",
 		Algorithm: "P256-HKDF-AESGCM",
 		PublicKey: []byte{4, 5, 6},
 	}); err != nil {
 		t.Fatalf("UpsertSignedPrekey() error = %v", err)
 	}
-	if err := store.PutOneTimePrekeys(ctx, "bob", []OneTimePrekey{
-		{Username: "bob", KeyID: "bob-otp-old", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{7}},
+	if err := store.PutOneTimePrekeys(ctx, "bob", "phone", []OneTimePrekey{
+		{Username: "bob", DeviceID: "phone", KeyID: "bob-otp-old", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{7}},
 	}); err != nil {
 		t.Fatalf("PutOneTimePrekeys(old) error = %v", err)
 	}
-	if err := store.DeleteOneTimePrekeys(ctx, "bob"); err != nil {
+	if err := store.DeleteOneTimePrekeys(ctx, "bob", "phone"); err != nil {
 		t.Fatalf("DeleteOneTimePrekeys() error = %v", err)
 	}
-	if err := store.PutOneTimePrekeys(ctx, "bob", []OneTimePrekey{
-		{Username: "bob", KeyID: "bob-otp-new", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{8}},
+	if err := store.PutOneTimePrekeys(ctx, "bob", "phone", []OneTimePrekey{
+		{Username: "bob", DeviceID: "phone", KeyID: "bob-otp-new", Algorithm: "P256-HKDF-AESGCM", PublicKey: []byte{8}},
 	}); err != nil {
 		t.Fatalf("PutOneTimePrekeys(new) error = %v", err)
 	}
 
-	bundle, err := store.AcquirePrekeyBundle(ctx, "bob")
+	bundle, err := store.AcquirePrekeyBundle(ctx, "bob", "phone")
 	if err != nil {
 		t.Fatalf("AcquirePrekeyBundle() error = %v", err)
 	}
 	if bundle.OneTimePrekey.KeyID != "bob-otp-new" {
 		t.Fatalf("AcquirePrekeyBundle() = %+v", bundle)
+	}
+}
+
+func TestMemoryKeyStoreAcquirePrekeyBundlesReturnsAllDevices(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryKeyStore()
+	ctx := context.Background()
+
+	for _, deviceID := range []string{"web", "phone"} {
+		if _, err := store.UpsertIdentityKey(ctx, IdentityKey{
+			Username:  "alice",
+			DeviceID:  deviceID,
+			KeyID:     "alice-" + deviceID + "-identity",
+			Algorithm: "P256-HKDF-AESGCM",
+			PublicKey: []byte{1, 2, 3},
+		}); err != nil {
+			t.Fatalf("UpsertIdentityKey(%s) error = %v", deviceID, err)
+		}
+		if _, err := store.UpsertSignedPrekey(ctx, SignedPrekey{
+			Username:  "alice",
+			DeviceID:  deviceID,
+			KeyID:     "alice-" + deviceID + "-spk",
+			Algorithm: "P256-HKDF-AESGCM",
+			PublicKey: []byte{4, 5, 6},
+		}); err != nil {
+			t.Fatalf("UpsertSignedPrekey(%s) error = %v", deviceID, err)
+		}
+	}
+
+	bundles, err := store.AcquirePrekeyBundles(ctx, "alice")
+	if err != nil {
+		t.Fatalf("AcquirePrekeyBundles() error = %v", err)
+	}
+	if len(bundles) != 2 {
+		t.Fatalf("AcquirePrekeyBundles() len = %d, want 2", len(bundles))
 	}
 }

@@ -5,6 +5,7 @@ import { Empty } from "@bufbuild/protobuf";
 
 import { createMessengerClients } from "./lib/api.js";
 import { loginFeedback } from "./lib/auth-ui.js";
+import { avatarView } from "./lib/avatar.js";
 import {
   buildPublishPrekeyBundle,
   createIdentity,
@@ -22,6 +23,15 @@ import {
   topUpOneTimePrekeys,
   createGroupKeyPackage,
 } from "./lib/e2ee.js";
+import {
+  createArchiveIdentity,
+  decryptArchivePayload,
+  encryptArchivePayload,
+  exportArchiveIdentityState,
+  importArchiveIdentityState,
+  restoreArchiveIdentityFromServer,
+  wrapArchiveIdentityForServer,
+} from "./lib/archive-e2ee.js";
 import {
   decryptMediaBytes,
   deserializeMediaDescriptor,
@@ -44,18 +54,25 @@ import {
   findMessageById as lookupMessageById,
   isGroupMessage,
   makeConversationId,
-  normalizeAvatarHex,
   peerFromConversationId,
   removeConversationById,
   upsertConversation,
   removeMessageCollection,
   upsertMessageCollection,
 } from "./lib/chat-state.js";
-import { directIdentityErrorMessage, prepareDirectConversation } from "./lib/direct-chat.js";
+import {
+  currentDevicePrekeyBundle,
+  directIdentityErrorMessage,
+  hasDirectBundleMaterial,
+  prepareDirectConversation,
+  shouldDecryptDirectAsSender,
+} from "./lib/direct-chat.js";
+import { hasUsableDirectIdentityMaterial, identityStorageKey } from "./lib/identity-state.js";
 
 const app = document.getElementById("app");
-const IDENTITY_STORAGE_PREFIX = "messenger-e2ee-identity:";
 const GROUP_KEYS_STORAGE_PREFIX = "messenger-e2ee-groupkeys:";
+const DEVICE_ID_STORAGE_KEY = "messenger-device-id";
+const ARCHIVE_IDENTITY_STORAGE_PREFIX = "messenger-archive-identity:";
 
 // ── Design helpers ──────────────────────────────────────────────────────────
 
@@ -82,14 +99,13 @@ function getAvatarColor(username) {
   return avatarColorFor(username);
 }
 
-function initials(name) {
-  return (name || '?').split(' ').map(w => w[0] || '').join('').toUpperCase().slice(0, 2) || '?';
-}
-
-function avatarHtml(name, color, size = 38, online = false, borderColor = 'var(--sidebar)') {
+function avatarHtml(name, profile, fallbackColor, size = 38, online = false, borderColor = 'var(--sidebar)', extraClass = "") {
+  const view = avatarView(profile, fallbackColor, name);
   const dot = Math.round(size * 0.28);
-  return `<div class="avatar" style="width:${size}px;height:${size}px;background:${escapeHtml(color)};font-size:${Math.round(size*0.36)}px;">` +
-    escapeHtml(initials(name)) +
+  return `<div class="avatar ${extraClass}" style="width:${size}px;height:${size}px;${view.kind === "initials" ? `background:${escapeHtml(view.color)};` : ""}font-size:${Math.round(size*0.36)}px;">` +
+    (view.kind === "image"
+      ? `<img src="${escapeHtml(view.src)}" alt="${escapeHtml(view.alt)}" class="avatar-image" />`
+      : escapeHtml(view.text)) +
     (online ? `<div class="avatar-dot" style="width:${dot}px;height:${dot}px;border-color:${borderColor};"></div>` : '') +
     `</div>`;
 }
@@ -121,6 +137,23 @@ function shortTime(timestamp) {
   else if (typeof timestamp.seconds === 'number') d = new Date(timestamp.seconds * 1000);
   else return '';
   return d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
+}
+
+function readAvatarFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      resolve("");
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      reject(new Error("Можно загрузить только изображение."));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Не удалось прочитать изображение."));
+    reader.readAsDataURL(file);
+  });
 }
 
 function doubleCheck(read = true) {
@@ -185,16 +218,19 @@ const state = {
     try { return { ...defaults, ...JSON.parse(localStorage.getItem("messenger-settings") || "{}") }; } catch { return defaults; }
   })(),
   identity: null,
+  archiveIdentity: null,
   identityKeys: new Map(),
   groupKeys: new Map(),
   mediaCache: new Map(),
   encryptionPrefs: new Map(),
   e2eeReady: false,
+  archiveSequence: 0,
   pendingAttachments: [],
+  imagePreview: null,
+  deviceId: loadOrCreateDeviceId(),
   profileDraft: {
     firstName: "",
     lastName: "",
-    avatarHex: "",
     avatarData: "",
   },
 };
@@ -230,19 +266,40 @@ function applySettings() {
 }
 applySettings();
 
-function identityStorageKey(username) {
-  return `${IDENTITY_STORAGE_PREFIX}${username}`;
-}
-
 function groupKeysStorageKey(username) {
   return `${GROUP_KEYS_STORAGE_PREFIX}${username}`;
+}
+
+function archiveIdentityStorageKey(username) {
+  return `${ARCHIVE_IDENTITY_STORAGE_PREFIX}${username}`;
+}
+
+function identityCacheKey(username, deviceId) {
+  return `${username}:${deviceId}`;
 }
 
 async function persistIdentityState() {
   if (!state.username || !state.identity) {
     return;
   }
-  localStorage.setItem(identityStorageKey(state.username), JSON.stringify(await exportIdentityState(state.identity)));
+  localStorage.setItem(identityStorageKey(state.username, state.deviceId), JSON.stringify(await exportIdentityState(state.identity)));
+}
+
+async function persistArchiveIdentityState() {
+  if (!state.username || !state.archiveIdentity) {
+    return;
+  }
+  localStorage.setItem(archiveIdentityStorageKey(state.username), JSON.stringify(await exportArchiveIdentityState(state.archiveIdentity)));
+}
+
+function loadOrCreateDeviceId() {
+  let deviceId = localStorage.getItem(DEVICE_ID_STORAGE_KEY);
+  if (deviceId) {
+    return deviceId;
+  }
+  deviceId = `web-${crypto.randomUUID()}`;
+  localStorage.setItem(DEVICE_ID_STORAGE_KEY, deviceId);
+  return deviceId;
 }
 
 const authInterceptor = (next) => async (req) => {
@@ -444,7 +501,7 @@ function buildGroupUserListHtml(label, users, selectedSet) {
       return `
         <div class="user-toggle-row" data-group-toggle="${escapeHtml(u.username)}">
           <div style="display:flex;align-items:center;gap:10px;">
-            ${avatarHtml(uName, getAvatarColor(u.username), 36, state.onlineUsers.has(u.username), 'var(--panel)')}
+            ${avatarHtml(uName, u, getAvatarColor(u.username), 36, state.onlineUsers.has(u.username), 'var(--panel)')}
             <div>
               <div style="font-size:13px;font-weight:500;color:var(--text);">${escapeHtml(uName)}</div>
               <div style="font-size:11px;color:var(--text-muted);">@${escapeHtml(u.username)}</div>
@@ -521,9 +578,11 @@ function renderChat() {
   const selectedMessage = findMessageById(state.selectedMessageId);
   const selectableGroupUsers = filterSelectableUsers(state.groupSearchResults, state.groupSelectedMembers, state.username);
   const activeGroupCanManage = canManageGroupMembers(activeConversation, state.username);
+  const editableProfile = state.showProfileEditor ? state.profileDraft : profile;
 
   const myName = displayName(state.username);
   const myColor = getAvatarColor(state.username);
+  const editableName = `${editableProfile.firstName || ""} ${editableProfile.lastName || ""}`.trim() || myName;
 
   // ── Sidebar ──────────────────────────────────────────────────────────────
   const sidebarHtml = `
@@ -544,7 +603,7 @@ function renderChat() {
           <div class="search-results-label">Найдено</div>
           ${state.userSearchResults.map((u) => `
             <button class="user-search-item" data-user-open="${escapeHtml(u.username)}" type="button">
-              ${avatarHtml(displayName(u.username), getAvatarColor(u.username), 34, state.onlineUsers.has(u.username))}
+              ${avatarHtml(displayName(u.username), u, getAvatarColor(u.username), 34, state.onlineUsers.has(u.username))}
               <div>
                 <div style="font-size:13px;font-weight:500;color:var(--text);">${escapeHtml(displayName(u.username))}</div>
                 <div style="font-size:11px;color:var(--text-muted);">@${escapeHtml(u.username)}</div>
@@ -574,7 +633,7 @@ function renderChat() {
           const unread = state.localUnread.get(conv.conversationId) || 0;
           return `
             <button class="conv-item ${active}" data-conversation-open="${escapeHtml(conv.conversationId)}" type="button">
-              ${avatarHtml(label, color, 44, online)}
+              ${avatarHtml(label, conv.peerProfile, color, 44, online)}
               <div class="conv-body">
                 <div class="conv-top">
                   <div class="conv-name">${escapeHtml(label)}</div>
@@ -593,7 +652,7 @@ function renderChat() {
       <div class="sidebar-footer">
         <div class="profile-row">
           <div class="profile-clickable" id="open-self-profile">
-            ${avatarHtml(myName, myColor, 38, true)}
+            ${avatarHtml(myName, state.profile, myColor, 38, true)}
             <div style="min-width:0;">
               <div class="profile-name">${escapeHtml(myName)}</div>
               <div class="profile-username">@${escapeHtml(state.username)}</div>
@@ -659,7 +718,7 @@ function renderChat() {
             <div class="section-label">Текущие участники (${state.groupSelectedMembers.length})</div>
             ${state.groupSelectedMembers.map((u) => `
               <div class="ge-item" style="margin-bottom:6px;">
-                ${avatarHtml(displayName(u.username), getAvatarColor(u.username), 32, false, 'var(--panel)')}
+                ${avatarHtml(displayName(u.username), u, getAvatarColor(u.username), 32, false, 'var(--panel)')}
                 <div class="ge-item-info">
                   <div class="ge-item-name">${escapeHtml(displayName(u.username))}</div>
                   <div class="ge-item-sub">${u.role === 1 ? "Администратор" : "@" + escapeHtml(u.username)}</div>
@@ -716,7 +775,7 @@ function renderChat() {
       <div class="chat-main">
         <div class="chat-header">
           <div class="chat-header-clickable" id="open-conv-profile">
-            ${avatarHtml(chatLabel, chatColor, 40, chatOnline, 'var(--panel)')}
+            ${avatarHtml(chatLabel, activeConversation?.peerProfile, chatColor, 40, chatOnline, 'var(--panel)')}
             <div class="chat-header-info">
               <div class="chat-header-name">${escapeHtml(chatLabel)}</div>
               <div class="chat-header-sub ${chatOnline ? "online-sub" : ""}">
@@ -794,7 +853,7 @@ function renderChat() {
             <button id="close-self-profile" class="icon-btn">${ic("close", 18)}</button>
           </div>
           <div class="profile-modal-avatar">
-            ${avatarHtml(myName, myColor, 80, true, 'var(--panel)')}
+            ${avatarHtml(editableName, editableProfile, myColor, 80, true, 'var(--panel)', state.showProfileEditor ? 'avatar-editable' : '')}
           </div>
           ${!state.showProfileEditor ? `
             <div class="profile-modal-info">
@@ -810,9 +869,12 @@ function renderChat() {
             </button>
           ` : `
             <div style="display:grid;gap:10px;">
-              <input id="profile-first-name" ${editInputStyle} placeholder="Имя" value="${escapeHtml(profile.firstName || "")}" />
-              <input id="profile-last-name"  ${editInputStyle} placeholder="Фамилия" value="${escapeHtml(profile.lastName || "")}" />
-              <input id="profile-avatar-hex" ${editInputStyle} placeholder="Цвет аватара (hex)" value="${escapeHtml((profile.avatarHex || "").replace("#", ""))}" />
+              <input id="profile-avatar-file" type="file" accept="image/*" hidden />
+              <button id="profile-avatar-picker" class="avatar-picker-btn" type="button" aria-label="Загрузить фото профиля">
+                Загрузить фото
+              </button>
+              <input id="profile-first-name" ${editInputStyle} placeholder="Имя" value="${escapeHtml(editableProfile.firstName || "")}" />
+              <input id="profile-last-name"  ${editInputStyle} placeholder="Фамилия" value="${escapeHtml(editableProfile.lastName || "")}" />
             </div>
             <div style="display:flex;gap:8px;">
               <button id="save-profile"   class="btn btn-primary" style="flex:1;">Сохранить</button>
@@ -838,7 +900,7 @@ function renderChat() {
               <button id="close-conv-profile" class="icon-btn">${ic("close", 18)}</button>
             </div>
             <div class="profile-modal-avatar">
-              ${avatarHtml(chatLabel, chatColor, 72, peerOnline, 'var(--panel)')}
+              ${avatarHtml(chatLabel, activeConversation?.peerProfile, chatColor, 72, peerOnline, 'var(--panel)')}
             </div>
             <div class="profile-modal-info">
               <div class="profile-modal-name">${escapeHtml(chatLabel)}</div>
@@ -871,7 +933,7 @@ function renderChat() {
         const isSelf = m.username === state.username;
         return `
           <div class="group-member-row${isSelf ? "" : " group-member-clickable"}"${isSelf ? "" : ` data-open-peer="${escapeHtml(m.username)}"`}>
-            ${avatarHtml(mName, mColor, 36, mOnline, 'var(--panel)')}
+            ${avatarHtml(mName, state.profiles.get(member.username), mColor, 36, mOnline, 'var(--panel)')}
             <div style="flex:1;min-width:0;">
               <div style="font-size:13px;font-weight:500;color:var(--text);display:flex;align-items:center;gap:6px;">
                 ${escapeHtml(mName)}
@@ -892,7 +954,7 @@ function renderChat() {
               <button id="close-conv-profile" class="icon-btn">${ic("close", 18)}</button>
             </div>
             <div class="profile-modal-avatar">
-              ${avatarHtml(chatLabel, chatColor, 72, false, 'var(--panel)')}
+              ${avatarHtml(chatLabel, null, chatColor, 72, false, 'var(--panel)')}
             </div>
             <div class="profile-modal-info">
               <div class="profile-modal-name">${escapeHtml(chatLabel)}</div>
@@ -911,7 +973,24 @@ function renderChat() {
     }
   })() : "";
 
-  app.innerHTML = `<div class="app-layout">${sidebarHtml}${chatAreaHtml}</div>${groupEditorModal}${selfProfileModal}${convProfileModal}${buildSettingsModal()}`;
+  const imagePreviewModal = state.imagePreview ? `
+    <div class="modal-overlay" id="image-preview-overlay">
+      <div class="modal-card" style="width:min(92vw,980px);max-height:92vh;display:flex;flex-direction:column;">
+        <div class="modal-header">
+          <div class="modal-title">${escapeHtml(state.imagePreview.filename || "Изображение")}</div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <a class="btn-subtle" href="${escapeHtml(state.imagePreview.src)}" download="${escapeHtml(state.imagePreview.filename || "image")}">Скачать</a>
+            <button id="close-image-preview" class="icon-btn">${ic("close", 18)}</button>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:center;overflow:auto;padding:8px 0 0;">
+          <img src="${escapeHtml(state.imagePreview.src)}" alt="${escapeHtml(state.imagePreview.filename || "image")}" style="max-width:100%;max-height:76vh;border-radius:18px;display:block;" />
+        </div>
+      </div>
+    </div>
+  ` : "";
+
+  app.innerHTML = `<div class="app-layout">${sidebarHtml}${chatAreaHtml}</div>${groupEditorModal}${selfProfileModal}${convProfileModal}${buildSettingsModal()}${imagePreviewModal}`;
 
   // Update send button state reactively via input event
   const textarea = document.getElementById("message-text");
@@ -929,6 +1008,26 @@ function renderChat() {
   } else {
     document.title = "Messenger";
   }
+
+  document.getElementById("close-image-preview")?.addEventListener("click", () => {
+    state.imagePreview = null;
+    render();
+  });
+  document.getElementById("image-preview-overlay")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) {
+      state.imagePreview = null;
+      render();
+    }
+  });
+  document.querySelectorAll("[data-preview-src]").forEach((element) => {
+    element.addEventListener("click", () => {
+      state.imagePreview = {
+        src: element.getAttribute("data-preview-src") || "",
+        filename: element.getAttribute("data-preview-name") || "image",
+      };
+      render();
+    });
+  });
 }
 
 function renderMessages(messages, searchQuery = "", searchCurrentMsgId = 0) {
@@ -963,7 +1062,7 @@ function renderMessages(messages, searchQuery = "", searchCurrentMsgId = 0) {
 
     const showSender = inGroup && !own && (i === 0 || messages[i - 1].from !== msg.from);
     const isLast = own && i === messages.length - 1;
-    const avatarEl = !own ? avatarHtml(senderName, senderColor, 28, false, 'var(--chat-bg)') : "";
+    const avatarEl = !own ? avatarHtml(senderName, state.profiles.get(msg.from), senderColor, 28, false, 'var(--chat-bg)') : "";
 
     const bubbleClasses = [
       "bubble",
@@ -1037,13 +1136,14 @@ function bindAuthEvents() {
         });
       }
 
-      const response = await authClient.login({ username, password });
+      const response = await authClient.login({ username, password, deviceId: state.deviceId });
+      state.deviceId = response.deviceId || loadOrCreateDeviceId();
       state.token = response.token;
       state.username = username;
       localStorage.setItem("token", response.token);
       localStorage.setItem("username", username);
       setAuthMessage("");
-      await initializeSession();
+      await initializeSession(password);
     } catch (err) {
       if (state.authMode === "login") {
         const feedback = loginFeedback(err);
@@ -1190,31 +1290,74 @@ function bindChatEvents() {
     try {
       let payload;
       let attachments = [];
+      let preparedAttachments = [];
+      let archiveRecords = [];
+      const createdAt = new Date();
       if (state.pendingAttachments.length > 0 && !encryptionEnabled) {
         throw new Error("Вложения доступны только при включенном E2EE.");
       }
       if (state.pendingAttachments.length > 0) {
-        attachments = await prepareOutgoingAttachments(activeConversation);
+        preparedAttachments = await prepareOutgoingAttachments(activeConversation);
+        attachments = preparedAttachments;
       }
       if (!encryptionEnabled) {
+        const owners = activeConversation.kind === 2
+          ? (activeConversation.memberUsernames || activeConversation.members?.map((member) => member.username) || [state.username])
+          : [state.username, state.activePeer];
+        if (text) {
+          archiveRecords.push(...await buildMessageArchiveRecords(owners, activeConversation.conversationId, {
+            kind: "message",
+            from: state.username,
+            to: activeConversation.kind === 2 ? activeConversation.conversationId : state.activePeer,
+            text,
+            senderDeviceId: state.deviceId,
+            createdAt: createdAt.toISOString(),
+            conversationKeyVersion: 0,
+          }, { createdAt }));
+        }
         payload = activeConversation.kind === 2
           ? {
             conversationId: activeConversation.conversationId,
             text,
             encrypted: false,
             attachments,
+            archiveRecords,
           }
           : {
             to: state.activePeer,
             text,
             encrypted: false,
             attachments,
+            archiveRecords,
           };
       } else if (activeConversation.kind === 2) {
         const { version, groupKeyBytes } = await ensureConversationKey(activeConversation);
         const encrypted = text ? await encryptGroupMessage(text, groupKeyBytes, version) : null;
-        if (attachments.length > 0) {
-          attachments = await encryptOutgoingAttachmentDescriptorsForGroup(attachments, groupKeyBytes, version);
+        if (preparedAttachments.length > 0) {
+          attachments = await encryptOutgoingAttachmentDescriptorsForGroup(preparedAttachments, groupKeyBytes, version);
+        }
+        const owners = activeConversation.memberUsernames || activeConversation.members?.map((member) => member.username) || [state.username];
+        if (text) {
+          archiveRecords.push(...await buildMessageArchiveRecords(owners, activeConversation.conversationId, {
+            kind: "message",
+            from: state.username,
+            to: activeConversation.conversationId,
+            text,
+            senderDeviceId: state.deviceId,
+            createdAt: createdAt.toISOString(),
+            conversationKeyVersion: version,
+          }, {
+            createdAt,
+          }));
+        }
+        if (preparedAttachments.length > 0) {
+          archiveRecords.push(...await buildAttachmentArchiveRecords(owners, activeConversation.conversationId, preparedAttachments, {
+            from: state.username,
+            recipient: activeConversation.conversationId,
+            text,
+            createdAt,
+            conversationKeyVersion: version,
+          }));
         }
         payload = {
           conversationId: activeConversation.conversationId,
@@ -1224,25 +1367,46 @@ function bindChatEvents() {
           conversationKeyVersion: version,
           encrypted: true,
           attachments,
+          archiveRecords,
         };
       } else {
-        const recipientBundle = await acquirePrekeyBundle(state.activePeer);
-        const encrypted = text ? await encryptDirectMessage(text, state.identity, recipientBundle) : null;
-        if (attachments.length > 0) {
-          attachments = await encryptOutgoingAttachmentDescriptorsForDirect(attachments, recipientBundle);
+        const directEnvelopes = text ? await buildDirectEnvelopes(text) : [];
+        if (preparedAttachments.length > 0) {
+          attachments = await encryptOutgoingAttachmentDescriptorsForDirect(preparedAttachments);
+        }
+        const owners = [state.username, state.activePeer];
+        if (text) {
+          archiveRecords.push(...await buildMessageArchiveRecords(owners, makeConversationId(state.username, state.activePeer), {
+            kind: "message",
+            from: state.username,
+            to: state.activePeer,
+            text,
+            senderDeviceId: state.deviceId,
+            createdAt: createdAt.toISOString(),
+            conversationKeyVersion: 1,
+          }, {
+            createdAt,
+          }));
+        }
+        if (preparedAttachments.length > 0) {
+          archiveRecords.push(...await buildAttachmentArchiveRecords(owners, makeConversationId(state.username, state.activePeer), preparedAttachments, {
+            from: state.username,
+            recipient: state.activePeer,
+            text,
+            createdAt,
+            conversationKeyVersion: 1,
+          }));
         }
         payload = {
           to: state.activePeer,
-          ciphertext: encrypted?.ciphertext,
-          nonce: encrypted?.nonce,
-          senderKeyId: encrypted?.senderKeyId || state.identity.keyId,
+          ciphertext: new Uint8Array(),
+          nonce: new Uint8Array(),
+          senderKeyId: state.identity.keyId,
           conversationKeyVersion: 1,
           encrypted: true,
-          recipientSignedPrekeyId: encrypted?.recipientSignedPrekeyId || recipientBundle.signedPrekey.keyId,
-          recipientSignedPrekeyPublic: encrypted?.recipientSignedPrekeyPublic || recipientBundle.signedPrekey.publicKey,
-          recipientOneTimePrekeyId: encrypted?.recipientOneTimePrekeyId || recipientBundle.oneTimePrekey?.keyId || "",
-          recipientOneTimePrekeyPublic: encrypted?.recipientOneTimePrekeyPublic || recipientBundle.oneTimePrekey?.publicKey || new Uint8Array(),
+          directEnvelopes,
           attachments,
+          archiveRecords,
         };
       }
       const message = await materializeMessage(await messageClient.sendMessage(payload));
@@ -1343,6 +1507,11 @@ function bindChatEvents() {
     if (e.target === e.currentTarget) { state.showSelfProfile = false; state.showProfileEditor = false; render(); }
   });
   document.getElementById("start-edit-profile")?.addEventListener("click", () => {
+    state.profileDraft = {
+      firstName: state.profile?.firstName || "",
+      lastName: state.profile?.lastName || "",
+      avatarData: state.profile?.avatarData || "",
+    };
     state.showProfileEditor = true;
     render();
   });
@@ -1350,12 +1519,37 @@ function bindChatEvents() {
     state.showProfileEditor = false;
     render();
   });
+  document.getElementById("profile-avatar-picker")?.addEventListener("click", () => {
+    document.getElementById("profile-avatar-file")?.click();
+  });
+  document.getElementById("profile-avatar-file")?.addEventListener("change", async (e) => {
+    try {
+      const file = e.target.files?.[0];
+      if (!file) {
+        return;
+      }
+      state.profileDraft.avatarData = await readAvatarFile(file);
+      render();
+    } catch (err) {
+      alert(readError(err));
+    }
+  });
+  document.getElementById("profile-first-name")?.addEventListener("input", (e) => {
+    state.profileDraft.firstName = e.target.value;
+  });
+  document.getElementById("profile-last-name")?.addEventListener("input", (e) => {
+    state.profileDraft.lastName = e.target.value;
+  });
+  document.querySelector(".profile-modal-avatar .avatar-editable")?.addEventListener("click", () => {
+    document.getElementById("profile-avatar-file")?.click();
+  });
   document.getElementById("save-profile")?.addEventListener("click", async () => {
     try {
       const profile = await userClient.updateProfile({
-        firstName: String(document.getElementById("profile-first-name")?.value || "").trim(),
-        lastName: String(document.getElementById("profile-last-name")?.value || "").trim(),
-        avatarHex: normalizeAvatarHex(String(document.getElementById("profile-avatar-hex")?.value || "")),
+        firstName: String(state.profileDraft.firstName || "").trim(),
+        lastName: String(state.profileDraft.lastName || "").trim(),
+        avatarHex: "",
+        avatarData: state.profileDraft.avatarData || "",
       });
       applyProfile(profile);
       state.showProfileEditor = false;
@@ -1740,11 +1934,13 @@ async function bootstrap() {
   await initializeSession();
 }
 
-async function initializeSession() {
+async function initializeSession(password = "") {
   await ensureIdentityReady();
+  await ensureHistoryArchiveReady(password);
   await Promise.all([loadProfile(), loadConversations()]);
   loadUnreadCounts();
   loadStoredGroupKeys();
+  await loadHistoryArchive();
   state.encryptionPrefs = loadEncryptionPrefs(state.username, localStorage);
   render();
   openEventStream();
@@ -1808,7 +2004,8 @@ async function loadMessages({ conversationId = "", withUsername = "" }) {
 
   const targetId = conversationId || makeConversationId(state.username, withUsername);
   const items = await Promise.all((response.items || []).map((message) => materializeMessage(message)));
-  state.messages.set(targetId, items);
+  state.messages.set(targetId, mergeArchivedMessages(targetId, items));
+  await backfillConversationHistory(targetId, items);
 }
 
 function openEventStream() {
@@ -1966,6 +2163,12 @@ function openGroupEditorForConversation(conversation) {
 
 function upsertMessage(message) {
   state.messages = upsertMessageCollection(state.messages, message);
+  const conversationId = message?.conversationId;
+  if (!conversationId) {
+    return;
+  }
+  const items = state.messages.get(conversationId) || [];
+  state.messages.set(conversationId, normalizeConversationMessages(items));
 }
 
 function isExistingGroupMember(username) {
@@ -2053,54 +2256,410 @@ function getRememberedConversationKey(conversationId, version) {
 }
 
 async function ensureIdentityReady() {
-  const stored = localStorage.getItem(identityStorageKey(state.username));
+  const storageKey = identityStorageKey(state.username, state.deviceId);
+  const legacyStorageKey = identityStorageKey(state.username, "");
+  const stored = localStorage.getItem(storageKey) || localStorage.getItem(legacyStorageKey);
   if (stored) {
-    state.identity = await importIdentityState(JSON.parse(stored));
+    try {
+      state.identity = await importIdentityState(JSON.parse(stored));
+    } catch (error) {
+      console.warn("failed to import stored identity, regenerating", error);
+      state.identity = await createIdentity(state.username);
+    }
   } else {
     state.identity = await createIdentity(state.username);
   }
+
+  if (!hasUsableDirectIdentityMaterial(state.identity)) {
+    state.identity = await createIdentity(state.username);
+  }
+
+  let publishedOnServer = null;
+  try {
+    publishedOnServer = await userClient.getIdentityKey({ username: state.username, deviceId: state.deviceId });
+  } catch (error) {
+    if (!(error instanceof ConnectError) || error.code !== Code.NotFound) {
+      throw error;
+    }
+  }
   state.identity = await topUpOneTimePrekeys(state.identity, 5);
   await persistIdentityState();
+  if (legacyStorageKey !== storageKey) {
+    localStorage.removeItem(legacyStorageKey);
+  }
 
   const published = await userClient.publishIdentityKey({
     keyId: state.identity.keyId,
     algorithm: state.identity.algorithm,
     publicKey: state.identity.publicKeyBytes,
   });
-  state.identityKeys.set(state.username, published);
+  state.identityKeys.set(identityCacheKey(state.username, published.deviceId), published);
   await userClient.publishPrekeyBundle(buildPublishPrekeyBundle(state.identity));
   state.identity = markPrekeysAsPublished(state.identity);
   await persistIdentityState();
   state.e2eeReady = true;
 }
 
-async function fetchIdentityKey(username) {
-  if (state.identityKeys.has(username)) {
-    return state.identityKeys.get(username);
+async function ensureHistoryArchiveReady(password = "") {
+  const storageKey = archiveIdentityStorageKey(state.username);
+  const stored = localStorage.getItem(storageKey);
+  let localIdentity = null;
+  if (stored) {
+    try {
+      localIdentity = await importArchiveIdentityState(JSON.parse(stored));
+    } catch (error) {
+      console.warn("failed to import stored archive identity, reinitializing", error);
+    }
   }
-  const key = await userClient.getIdentityKey({ username });
-  state.identityKeys.set(username, key);
+
+  let header = null;
+  try {
+    header = await userClient.getHistoryArchiveHeader(new Empty());
+  } catch (error) {
+    if (!(error instanceof ConnectError) || error.code !== Code.NotFound) {
+      throw error;
+    }
+  }
+
+  if (localIdentity && header) {
+    if (bytesEqual(localIdentity.publicKeyBytes, header.publicKey)) {
+      state.archiveIdentity = localIdentity;
+      await persistArchiveIdentityState();
+      return;
+    }
+    if (!password) {
+      console.warn("archive identity mismatch detected, keeping local identity until next password login");
+      state.archiveIdentity = localIdentity;
+      return;
+    }
+    state.archiveIdentity = await restoreArchiveIdentityFromServer(header, password, state.username);
+    await persistArchiveIdentityState();
+    return;
+  }
+
+  if (localIdentity && !header) {
+    state.archiveIdentity = localIdentity;
+    if (!password) {
+      console.warn("history archive header is missing on the server; it will be uploaded on the next password login");
+      return;
+    }
+    const wrapped = await wrapArchiveIdentityForServer(localIdentity, password);
+    await userClient.initializeHistoryArchive({
+      publicKey: wrapped.publicKey,
+      encryptedPrivateKey: wrapped.encryptedPrivateKey,
+      kdfSalt: wrapped.kdfSalt,
+      kdfParams: wrapped.kdfParams,
+      version: wrapped.version,
+    });
+    await persistArchiveIdentityState();
+    return;
+  }
+
+  if (header) {
+    if (!password) {
+      throw new Error("Для восстановления истории на этом устройстве нужен пароль входа.");
+    }
+    state.archiveIdentity = await restoreArchiveIdentityFromServer(header, password, state.username);
+    await persistArchiveIdentityState();
+    return;
+  }
+
+  if (!password) {
+    state.archiveIdentity = null;
+    console.warn("history archive is not initialized yet and cannot be bootstrapped without the login password");
+    return;
+  }
+
+  state.archiveIdentity = await createArchiveIdentity(state.username);
+  const wrapped = await wrapArchiveIdentityForServer(state.archiveIdentity, password);
+  await userClient.initializeHistoryArchive({
+    publicKey: wrapped.publicKey,
+    encryptedPrivateKey: wrapped.encryptedPrivateKey,
+    kdfSalt: wrapped.kdfSalt,
+    kdfParams: wrapped.kdfParams,
+    version: wrapped.version,
+  });
+  await persistArchiveIdentityState();
+}
+
+async function loadHistoryArchive() {
+  if (!state.archiveIdentity) {
+    return;
+  }
+  let afterSequence = 0;
+  const archivedGroupKeys = [];
+  const archivedMessages = new Map();
+  for (;;) {
+    const response = await messageClient.listHistoryArchiveRecords({
+      afterSequence,
+      limit: 200,
+    });
+    const items = response.items || [];
+    if (items.length === 0) {
+      break;
+    }
+    for (const item of items) {
+      afterSequence = Math.max(afterSequence, Number(item.sequence || 0));
+      const decrypted = await decryptArchivePayload({
+        ciphertext: item.ciphertext,
+        nonce: item.nonce,
+        ephemeralPublicKey: item.ephemeralPublicKey,
+      }, state.archiveIdentity);
+      const payload = JSON.parse(new TextDecoder().decode(decrypted));
+      if (item.recordType === 5) {
+        archivedGroupKeys.push(payload);
+        continue;
+      }
+      const conversationMessages = archivedMessages.get(item.conversationId) || new Map();
+      const messageId = Number(item.messageId || payload.messageId || 0);
+      const existing = conversationMessages.get(messageId);
+      if (payload.kind === "message") {
+        conversationMessages.set(messageId, {
+          messageId,
+          conversationId: item.conversationId,
+          from: payload.from,
+          to: payload.to,
+          senderDeviceId: payload.senderDeviceId || "",
+          text: payload.text || "",
+          createdAt: { toDate: () => new Date(payload.createdAt) },
+          encrypted: false,
+          conversationKeyVersion: payload.conversationKeyVersion || 0,
+          attachments: existing?.attachments || [],
+          archived: true,
+        });
+      } else if (payload.kind === "attachment") {
+        const base = existing || {
+          messageId,
+          conversationId: item.conversationId,
+          from: payload.from,
+          to: payload.to,
+          senderDeviceId: payload.senderDeviceId || "",
+          text: payload.text || "",
+          createdAt: { toDate: () => new Date(payload.createdAt) },
+          encrypted: false,
+          conversationKeyVersion: payload.conversationKeyVersion || 0,
+          attachments: [],
+          archived: true,
+        };
+        base.attachments = [
+          ...(base.attachments || []).filter((attachment) => attachment.attachmentId !== payload.attachmentId),
+          {
+            attachmentId: payload.attachmentId,
+            kind: attachmentKindToProtoValue(payload.descriptor.kind),
+            filename: payload.descriptor.originalFilename,
+            mimeType: payload.descriptor.mimeType,
+            sizeBytes: payload.descriptor.sizeBytes,
+            mediaId: payload.mediaId,
+            archiveDescriptor: payload.descriptor,
+            sha256: new Uint8Array(payload.sha256 || []),
+            ciphertextSize: payload.descriptor.ciphertextSize,
+          },
+        ];
+        conversationMessages.set(messageId, base);
+      }
+      archivedMessages.set(item.conversationId, conversationMessages);
+    }
+    if (items.length < 200) {
+      break;
+    }
+  }
+
+  for (const payload of archivedGroupKeys) {
+    rememberConversationKey(payload.conversationId, payload.version, new Uint8Array(payload.groupKeyBytes));
+  }
+
+  for (const [conversationId, byMessageId] of archivedMessages.entries()) {
+    const materialized = await Promise.all([...byMessageId.values()].map((message) => materializeMessage(message)));
+    const merged = mergeArchivedMessages(conversationId, materialized);
+    state.messages.set(conversationId, merged);
+  }
+  state.archiveSequence = afterSequence;
+}
+
+async function fetchIdentityKey(username, deviceId) {
+  const cacheKey = identityCacheKey(username, deviceId);
+  if (state.identityKeys.has(cacheKey)) {
+    return state.identityKeys.get(cacheKey);
+  }
+  const key = await userClient.getIdentityKey({ username, deviceId });
+  state.identityKeys.set(cacheKey, key);
   return key;
 }
 
 async function fetchIdentityKeys(usernames) {
   const unique = [...new Set(usernames.filter(Boolean))];
-  const missing = unique.filter((username) => !state.identityKeys.has(username));
-  if (missing.length > 0) {
-    const response = await userClient.getIdentityKeys({ usernames: missing });
-    for (const item of response.items) {
-      state.identityKeys.set(item.username, item);
-    }
+  const response = await userClient.getIdentityKeys({ usernames: unique });
+  for (const item of response.items) {
+    state.identityKeys.set(identityCacheKey(item.username, item.deviceId), item);
   }
-  const unresolved = unique.filter((username) => !state.identityKeys.has(username));
+  const unresolved = unique.filter((username) => !response.items.some((item) => item.username === username));
   if (unresolved.length > 0) {
     throw new Error(`У пользователей ещё нет опубликованных ключей: ${unresolved.join(", ")}`);
   }
-  return unique.map((username) => state.identityKeys.get(username));
+  return response.items;
 }
 
-async function acquirePrekeyBundle(username) {
-  return userClient.acquirePrekeyBundle({ username });
+async function fetchSenderIdentity(username, keyId) {
+  let identity = findIdentityByKeyId(username, keyId);
+  if (identity) {
+    return identity;
+  }
+  await fetchIdentityKeys([username]);
+  identity = findIdentityByKeyId(username, keyId);
+  if (!identity) {
+    throw new Error(`Не найден identity key ${keyId} для ${username}`);
+  }
+  return identity;
+}
+
+function findIdentityByKeyId(username, keyId) {
+  for (const item of state.identityKeys.values()) {
+    if (item.username === username && item.keyId === keyId) {
+      return item;
+    }
+  }
+  return null;
+}
+
+async function acquirePrekeyBundles(username) {
+  const response = await userClient.acquirePrekeyBundles({ username });
+  return response.items || [];
+}
+
+async function fetchArchivePublicKeys(usernames) {
+  const unique = [...new Set(usernames.filter(Boolean))];
+  const response = await userClient.getArchivePublicKeys({ usernames: unique });
+  const map = new Map();
+  for (const item of response.items || []) {
+    map.set(item.username, item);
+  }
+  return map;
+}
+
+function logMissingArchiveOwners(ownerUsernames, bundles) {
+  const unresolved = [...new Set(ownerUsernames.filter(Boolean))].filter((username) => !bundles.has(username));
+  if (unresolved.length > 0) {
+    console.warn("history archive fan-out skipped for users without archive key", unresolved);
+  }
+}
+
+async function buildArchiveRecord(bundle, recordType, conversationId, payload, meta = {}) {
+  const encrypted = await encryptArchivePayload(
+    new TextEncoder().encode(JSON.stringify(payload)),
+    bundle.publicKey,
+  );
+  return {
+    recordId: meta.recordId || `${bundle.username}-${recordType}-${crypto.randomUUID()}`,
+    ownerUsername: bundle.username,
+    conversationId,
+    recordType,
+    messageId: meta.messageId || 0,
+    attachmentId: meta.attachmentId || "",
+    groupKeyVersion: meta.groupKeyVersion || 0,
+    sender: state.username,
+    createdAt: meta.createdAt || new Date(),
+    ciphertext: encrypted.ciphertext,
+    nonce: encrypted.nonce,
+    ephemeralPublicKey: encrypted.ephemeralPublicKey,
+    archiveKeyVersion: bundle.version || 1,
+  };
+}
+
+async function buildMessageArchiveRecords(ownerUsernames, conversationId, payload, meta = {}) {
+  const publicKeys = await fetchArchivePublicKeys(ownerUsernames);
+  logMissingArchiveOwners(ownerUsernames, publicKeys);
+  const records = [];
+  for (const ownerUsername of [...new Set(ownerUsernames.filter(Boolean))]) {
+    const bundle = publicKeys.get(ownerUsername);
+    if (!bundle) {
+      continue;
+    }
+    records.push(await buildArchiveRecord(bundle, payload.to === conversationId ? 2 : 1, conversationId, payload, meta));
+  }
+  return records;
+}
+
+async function buildAttachmentArchiveRecords(ownerUsernames, conversationId, attachments, meta = {}) {
+  const publicKeys = await fetchArchivePublicKeys(ownerUsernames);
+  logMissingArchiveOwners(ownerUsernames, publicKeys);
+  const records = [];
+  for (const ownerUsername of [...new Set(ownerUsernames.filter(Boolean))]) {
+    const bundle = publicKeys.get(ownerUsername);
+    if (!bundle) {
+      continue;
+    }
+    for (const attachment of attachments) {
+      records.push(await buildArchiveRecord(bundle, conversationId === meta.recipient ? 4 : 3, conversationId, {
+        kind: "attachment",
+        attachmentId: attachment.attachmentId,
+        from: meta.from,
+        to: meta.recipient,
+        text: meta.text || "",
+        senderDeviceId: state.deviceId,
+        createdAt: meta.createdAt.toISOString(),
+        conversationKeyVersion: meta.conversationKeyVersion || 0,
+        mediaId: attachment.mediaId,
+        descriptor: attachment.descriptor,
+        sha256: Array.from(attachment.sha256 || []),
+      }, {
+        ...meta,
+        attachmentId: attachment.attachmentId,
+      }));
+    }
+  }
+  return records;
+}
+
+async function buildGroupKeyArchiveRecords(ownerUsernames, conversationId, version, groupKeyBytes) {
+  const publicKeys = await fetchArchivePublicKeys(ownerUsernames);
+  logMissingArchiveOwners(ownerUsernames, publicKeys);
+  const records = [];
+  for (const ownerUsername of [...new Set(ownerUsernames.filter(Boolean))]) {
+    const bundle = publicKeys.get(ownerUsername);
+    if (!bundle) {
+      continue;
+    }
+    records.push(await buildArchiveRecord(bundle, 5, conversationId, {
+      kind: "group_key",
+      conversationId,
+      version,
+      groupKeyBytes: Array.from(groupKeyBytes),
+    }, {
+      groupKeyVersion: version,
+      createdAt: new Date(),
+    }));
+  }
+  return records;
+}
+
+async function buildDirectEnvelopes(plaintext) {
+  const recipientBundles = await acquirePrekeyBundles(state.activePeer);
+  if (recipientBundles.length === 0) {
+    throw new Error("У получателя нет опубликованных E2EE-ключей.");
+  }
+  const ownBundles = await acquirePrekeyBundles(state.username);
+  const targets = [
+    ...recipientBundles,
+    ...ownBundles.filter((bundle) => bundle.deviceId !== state.deviceId),
+  ].filter(hasDirectBundleMaterial);
+  if (targets.length === 0) {
+    throw new Error("У участников чата нет корректного E2EE-материала.");
+  }
+  const envelopes = [];
+  for (const bundle of targets) {
+    const encrypted = await encryptDirectMessage(plaintext, state.identity, bundle);
+    envelopes.push({
+      targetUsername: bundle.username,
+      targetDeviceId: bundle.deviceId,
+      ciphertext: encrypted.ciphertext,
+      nonce: encrypted.nonce,
+      recipientSignedPrekeyId: encrypted.recipientSignedPrekeyId,
+      recipientSignedPrekeyPublic: encrypted.recipientSignedPrekeyPublic,
+      recipientOneTimePrekeyId: encrypted.recipientOneTimePrekeyId || "",
+      recipientOneTimePrekeyPublic: encrypted.recipientOneTimePrekeyPublic || new Uint8Array(),
+    });
+  }
+  return envelopes;
 }
 
 async function loadConversationKey(conversationId, version) {
@@ -2110,11 +2669,11 @@ async function loadConversationKey(conversationId, version) {
   }
 
   const keyPackage = await userClient.getConversationKey({ conversationId, version });
-  const envelope = keyPackage.envelopes.find((item) => item.username === state.username);
+  const envelope = keyPackage.envelopes.find((item) => item.username === state.username && item.deviceId === state.deviceId);
   if (!envelope) {
     throw new Error("group key envelope not found");
   }
-  const senderIdentity = await fetchIdentityKey(keyPackage.createdBy);
+  const senderIdentity = await fetchSenderIdentity(keyPackage.createdBy, envelope.senderKeyId);
   const groupKeyBytes = await decryptGroupKeyEnvelope(envelope, state.identity, senderIdentity.publicKey);
   rememberConversationKey(conversationId, version, groupKeyBytes);
   return groupKeyBytes;
@@ -2126,11 +2685,11 @@ async function loadLatestConversationKey(conversationId) {
   if (cached) {
     return { version: keyPackage.version, groupKeyBytes: cached };
   }
-  const envelope = keyPackage.envelopes.find((item) => item.username === state.username);
+  const envelope = keyPackage.envelopes.find((item) => item.username === state.username && item.deviceId === state.deviceId);
   if (!envelope) {
     throw new Error("latest group key envelope not found");
   }
-  const senderIdentity = await fetchIdentityKey(keyPackage.createdBy);
+  const senderIdentity = await fetchSenderIdentity(keyPackage.createdBy, envelope.senderKeyId);
   const groupKeyBytes = await decryptGroupKeyEnvelope(envelope, state.identity, senderIdentity.publicKey);
   rememberConversationKey(conversationId, keyPackage.version, groupKeyBytes);
   return { version: keyPackage.version, groupKeyBytes };
@@ -2147,6 +2706,7 @@ async function rotateConversationKey(conversation, version) {
     state.identity,
     identities.map((identity) => ({
       username: identity.username,
+      deviceId: identity.deviceId,
       keyId: identity.keyId,
       publicKeyBytes: identity.publicKey,
     })),
@@ -2156,6 +2716,7 @@ async function rotateConversationKey(conversation, version) {
     version: packageData.version,
     algorithm: packageData.algorithm,
     envelopes: packageData.envelopes,
+    archiveRecords: await buildGroupKeyArchiveRecords(members, packageData.conversationId, packageData.version, packageData.groupKeyBytes),
   });
   rememberConversationKey(conversation.conversationId, version, packageData.groupKeyBytes);
   return packageData.groupKeyBytes;
@@ -2169,6 +2730,7 @@ async function buildNextGroupKeyUpdate(conversationId, version, members) {
     state.identity,
     identities.map((identity) => ({
       username: identity.username,
+      deviceId: identity.deviceId,
       keyId: identity.keyId,
       publicKeyBytes: identity.publicKey,
     })),
@@ -2178,6 +2740,7 @@ async function buildNextGroupKeyUpdate(conversationId, version, members) {
       version: packageData.version,
       algorithm: packageData.algorithm,
       envelopes: packageData.envelopes,
+      archiveRecords: await buildGroupKeyArchiveRecords(members, packageData.conversationId, packageData.version, packageData.groupKeyBytes),
     },
     groupKeyBytes: packageData.groupKeyBytes,
   };
@@ -2224,6 +2787,7 @@ async function prepareOutgoingAttachments(activeConversation) {
       sizeBytes: draft.file.size,
       mediaId: prepared.mediaId,
       descriptorPlaintext: serializeMediaDescriptor(encrypted.descriptor),
+      descriptor: encrypted.descriptor,
       sha256: encrypted.sha256,
       ciphertextSize: encrypted.ciphertextSize,
       preview: encrypted.kind === "image" ? { width: 0, height: 0 } : undefined,
@@ -2233,14 +2797,21 @@ async function prepareOutgoingAttachments(activeConversation) {
   return out;
 }
 
-async function encryptOutgoingAttachmentDescriptorsForDirect(attachments, recipientBundle) {
+async function encryptOutgoingAttachmentDescriptorsForDirect(attachments) {
+  const recipientBundles = await acquirePrekeyBundles(state.activePeer);
+  if (recipientBundles.length === 0) {
+    throw new Error("У получателя нет опубликованных E2EE-ключей.");
+  }
+  const ownBundles = await acquirePrekeyBundles(state.username);
+  const targets = [
+    ...recipientBundles,
+    ...ownBundles.filter((bundle) => bundle.deviceId !== state.deviceId),
+  ].filter(hasDirectBundleMaterial);
+  if (targets.length === 0) {
+    throw new Error("У участников чата нет корректного E2EE-материала.");
+  }
   const out = [];
   for (const attachment of attachments) {
-    const encryptedDescriptor = await encryptDirectMessage(
-      new TextDecoder().decode(attachment.descriptorPlaintext),
-      state.identity,
-      recipientBundle,
-    );
     out.push({
       attachmentId: attachment.attachmentId,
       kind: attachment.kind,
@@ -2248,11 +2819,26 @@ async function encryptOutgoingAttachmentDescriptorsForDirect(attachments, recipi
       mimeType: attachment.mimeType,
       sizeBytes: attachment.sizeBytes,
       mediaId: attachment.mediaId,
-      encryptedDescriptor: encryptedDescriptor.ciphertext,
-      descriptorNonce: encryptedDescriptor.nonce,
       sha256: attachment.sha256,
       ciphertextSize: attachment.ciphertextSize,
       preview: attachment.preview,
+      directEnvelopes: await Promise.all(targets.map(async (bundle) => {
+        const encryptedDescriptor = await encryptDirectMessage(
+          new TextDecoder().decode(attachment.descriptorPlaintext),
+          state.identity,
+          bundle,
+        );
+        return {
+          targetUsername: bundle.username,
+          targetDeviceId: bundle.deviceId,
+          encryptedDescriptor: encryptedDescriptor.ciphertext,
+          descriptorNonce: encryptedDescriptor.nonce,
+          recipientSignedPrekeyId: encryptedDescriptor.recipientSignedPrekeyId,
+          recipientSignedPrekeyPublic: encryptedDescriptor.recipientSignedPrekeyPublic,
+          recipientOneTimePrekeyId: encryptedDescriptor.recipientOneTimePrekeyId || "",
+          recipientOneTimePrekeyPublic: encryptedDescriptor.recipientOneTimePrekeyPublic || new Uint8Array(),
+        };
+      })),
     });
   }
   return out;
@@ -2306,10 +2892,10 @@ async function materializeMessage(message) {
       if (message.conversationId === message.to) {
         const groupKeyBytes = await loadConversationKey(message.conversationId, message.conversationKeyVersion);
         text = await decryptGroupMessage(message, groupKeyBytes);
-      } else if (message.from === state.username) {
+      } else if (shouldDecryptDirectAsSender({ message, username: state.username, identity: state.identity })) {
         text = await decryptDirectMessageForSender(message, state.identity);
       } else {
-        const senderIdentity = await fetchIdentityKey(message.from);
+        const senderIdentity = await fetchSenderIdentity(message.from, message.senderKeyId);
         text = await decryptDirectMessageForRecipient(message, state.identity, senderIdentity.publicKey);
       }
     }
@@ -2329,29 +2915,34 @@ async function materializeAttachment(message, attachment) {
     if (state.mediaCache.has(cacheKey)) {
       return { ...attachment, ...state.mediaCache.get(cacheKey), decryptionError: false };
     }
-    let descriptorText;
-    if (message.conversationId === message.to) {
-      const groupKeyBytes = await loadConversationKey(message.conversationId, message.conversationKeyVersion);
-      descriptorText = await decryptGroupMessage({
-        ciphertext: attachment.encryptedDescriptor,
-        nonce: attachment.descriptorNonce,
-      }, groupKeyBytes);
-    } else if (message.from === state.username) {
-      descriptorText = await decryptDirectMessageForSender({
-        ciphertext: attachment.encryptedDescriptor,
-        nonce: attachment.descriptorNonce,
-        recipientSignedPrekeyPublic: message.recipientSignedPrekeyPublic,
-        recipientOneTimePrekeyPublic: message.recipientOneTimePrekeyPublic,
-      }, state.identity);
+    let descriptor;
+    if (attachment.archiveDescriptor) {
+      descriptor = attachment.archiveDescriptor;
     } else {
-      const senderIdentity = await fetchIdentityKey(message.from);
-      descriptorText = await decryptDirectMessageForRecipient({
-        ciphertext: attachment.encryptedDescriptor,
-        nonce: attachment.descriptorNonce,
-        recipientOneTimePrekeyId: message.recipientOneTimePrekeyId,
-      }, state.identity, senderIdentity.publicKey);
+      let descriptorText;
+      if (message.conversationId === message.to) {
+        const groupKeyBytes = await loadConversationKey(message.conversationId, message.conversationKeyVersion);
+        descriptorText = await decryptGroupMessage({
+          ciphertext: attachment.encryptedDescriptor,
+          nonce: attachment.descriptorNonce,
+        }, groupKeyBytes);
+      } else if (shouldDecryptDirectAsSender({ message, username: state.username, identity: state.identity })) {
+        descriptorText = await decryptDirectMessageForSender({
+          ciphertext: attachment.encryptedDescriptor,
+          nonce: attachment.descriptorNonce,
+          recipientSignedPrekeyPublic: message.recipientSignedPrekeyPublic,
+          recipientOneTimePrekeyPublic: message.recipientOneTimePrekeyPublic,
+        }, state.identity);
+      } else {
+        const senderIdentity = await fetchSenderIdentity(message.from, message.senderKeyId);
+        descriptorText = await decryptDirectMessageForRecipient({
+          ciphertext: attachment.encryptedDescriptor,
+          nonce: attachment.descriptorNonce,
+          recipientOneTimePrekeyId: message.recipientOneTimePrekeyId,
+        }, state.identity, senderIdentity.publicKey);
+      }
+      descriptor = deserializeMediaDescriptor(new TextEncoder().encode(descriptorText));
     }
-    const descriptor = deserializeMediaDescriptor(new TextEncoder().encode(descriptorText));
     const media = await messageClient.getMedia({ mediaId: attachment.mediaId });
     const plaintext = await decryptMediaBytes(media.ciphertext, descriptor, media.nonce);
     const blob = new Blob([plaintext], { type: descriptor.mimeType });
@@ -2362,6 +2953,7 @@ async function materializeAttachment(message, attachment) {
       filename: descriptor.originalFilename,
       kind: descriptor.kind,
       sizeBytes: descriptor.sizeBytes,
+      archiveDescriptor: descriptor,
     };
     state.mediaCache.set(cacheKey, materialized);
     return { ...attachment, ...materialized, decryptionError: false };
@@ -2377,11 +2969,188 @@ function renderAttachmentBodies(attachments) {
       return `<div class="attach-card">[Не удалось расшифровать вложение]</div>`;
     }
     if (item.kind === 1 || item.kind === "image") {
-      return `<div class="attach-card"><img src="${escapeHtml(item.objectUrl || "")}" alt="${escapeHtml(item.filename || "image")}" style="max-width:240px;border-radius:14px;display:block;" /></div>`;
+      return `<button class="attach-card" type="button" data-preview-src="${escapeHtml(item.objectUrl || "")}" data-preview-name="${escapeHtml(item.filename || "image")}" style="padding:0;border:none;background:none;cursor:pointer;"><img src="${escapeHtml(item.objectUrl || "")}" alt="${escapeHtml(item.filename || "image")}" style="max-width:240px;border-radius:14px;display:block;" /></button>`;
     }
     const label = item.kind === 2 || item.kind === "video" ? "Видео" : "Файл";
     return `<a class="attach-card" href="${escapeHtml(item.objectUrl || "#")}" download="${escapeHtml(item.filename || "file")}">${label}: ${escapeHtml(item.filename || "attachment")}</a>`;
   }).join("");
+}
+
+function bytesEqual(left, right) {
+  if (!left || !right || left.length !== right.length) {
+    return false;
+  }
+  for (let i = 0; i < left.length; i++) {
+    if (left[i] !== right[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function archiveRecordId(ownerUsername, recordType, conversationId, messageId, attachmentId = "", groupKeyVersion = 0) {
+  return `backfill:v2:${ownerUsername}:${recordType}:${conversationId}:${messageId}:${attachmentId}:${groupKeyVersion}`;
+}
+
+function messageTimestamp(message) {
+  if (message?.createdAt?.toDate) {
+    return message.createdAt.toDate();
+  }
+  if (message?.ts) {
+    return new Date(message.ts);
+  }
+  if (message?.createdAt) {
+    return new Date(message.createdAt);
+  }
+  return new Date();
+}
+
+function isUnavailableArchivedText(text) {
+  return text === "[Сообщение недоступно на этом устройстве]" || text === "[Не удалось расшифровать]";
+}
+
+function isUnavailablePlaceholderMessage(message) {
+  return isUnavailableArchivedText(message?.text || "") && (!message?.attachments || message.attachments.length === 0);
+}
+
+function hasRenderableMessageContent(message) {
+  return (typeof message?.text === "string" && message.text.trim() && !isUnavailableArchivedText(message.text))
+    || Boolean(message?.attachments?.length);
+}
+
+function isSameConversationDirection(a, b) {
+  return a?.from === b?.from && a?.to === b?.to;
+}
+
+function isNearMessageTimestamp(a, b, maxDeltaMs = 15000) {
+  return Math.abs(messageTimestamp(a).getTime() - messageTimestamp(b).getTime()) <= maxDeltaMs;
+}
+
+function shouldSuppressUnavailablePlaceholder(placeholder, messages) {
+  if (!isUnavailablePlaceholderMessage(placeholder)) {
+    return false;
+  }
+  return messages.some((candidate) => candidate !== placeholder
+    && isSameConversationDirection(candidate, placeholder)
+    && isNearMessageTimestamp(candidate, placeholder)
+    && hasRenderableMessageContent(candidate));
+}
+
+function normalizeConversationMessages(messages) {
+  return messages.filter((message, _, items) => !shouldSuppressUnavailablePlaceholder(message, items));
+}
+
+async function backfillConversationHistory(conversationId, messages) {
+  if (!state.archiveIdentity || !conversationId || messages.length === 0) {
+    return;
+  }
+  const readableMessages = messages.filter((message) => Number(message.messageId || 0) > 0 && !message.archived);
+  if (readableMessages.length === 0) {
+    return;
+  }
+  const conversation = state.conversations.find((item) => item.conversationId === conversationId);
+  const isGroup = conversation?.kind === 2 || readableMessages.some((message) => message.conversationId === message.to);
+  const owners = [state.username];
+  const publicKeys = await fetchArchivePublicKeys(owners);
+  logMissingArchiveOwners(owners, publicKeys);
+  if (publicKeys.size === 0) {
+    return;
+  }
+
+  const records = [];
+  for (const message of readableMessages) {
+    const createdAt = messageTimestamp(message);
+    const messageId = Number(message.messageId || 0);
+    if (typeof message.text === "string" && message.text.trim() && !message.decryptionError && !isUnavailableArchivedText(message.text)) {
+      const recordType = isGroup ? 2 : 1;
+      const payload = {
+        kind: "message",
+        from: message.from,
+        to: message.to,
+        text: message.text,
+        senderDeviceId: message.senderDeviceId || "",
+        createdAt: createdAt.toISOString(),
+        conversationKeyVersion: message.conversationKeyVersion || 0,
+      };
+      for (const [ownerUsername, bundle] of publicKeys.entries()) {
+        records.push(await buildArchiveRecord(bundle, recordType, conversationId, payload, {
+          messageId,
+          createdAt,
+          recordId: archiveRecordId(ownerUsername, recordType, conversationId, messageId),
+        }));
+      }
+    }
+
+    for (const attachment of message.attachments || []) {
+      if (attachment.decryptionError || !attachment.archiveDescriptor) {
+        continue;
+      }
+      const recordType = isGroup ? 4 : 3;
+      const payload = {
+        kind: "attachment",
+        attachmentId: attachment.attachmentId,
+        from: message.from,
+        to: message.to,
+        text: typeof message.text === "string" && !isUnavailableArchivedText(message.text) ? message.text : "",
+        senderDeviceId: message.senderDeviceId || "",
+        createdAt: createdAt.toISOString(),
+        conversationKeyVersion: message.conversationKeyVersion || 0,
+        mediaId: attachment.mediaId,
+        descriptor: attachment.archiveDescriptor,
+        sha256: Array.from(attachment.sha256 || []),
+      };
+      for (const [ownerUsername, bundle] of publicKeys.entries()) {
+        records.push(await buildArchiveRecord(bundle, recordType, conversationId, payload, {
+          messageId,
+          attachmentId: attachment.attachmentId,
+          createdAt,
+          recordId: archiveRecordId(ownerUsername, recordType, conversationId, messageId, attachment.attachmentId),
+        }));
+      }
+    }
+  }
+
+  if (records.length === 0) {
+    return;
+  }
+  try {
+    await messageClient.appendHistoryArchiveRecords({ items: records });
+  } catch (error) {
+    console.warn("failed to backfill readable conversation history into archive", error);
+  }
+}
+
+function mergeArchivedMessages(conversationId, liveMessages) {
+  const archived = state.messages.get(conversationId) || [];
+  if (archived.length === 0) {
+    return normalizeConversationMessages(liveMessages);
+  }
+  const merged = new Map();
+  for (const message of liveMessages) {
+    merged.set(message.messageId, message);
+  }
+  for (const archivedMessage of archived) {
+    const existing = merged.get(archivedMessage.messageId);
+    if (!existing) {
+      merged.set(archivedMessage.messageId, archivedMessage);
+      continue;
+    }
+    if (existing.text === "[Сообщение недоступно на этом устройстве]") {
+      merged.set(archivedMessage.messageId, {
+        ...archivedMessage,
+        attachments: archivedMessage.attachments?.length ? archivedMessage.attachments : existing.attachments,
+      });
+      continue;
+    }
+    if ((!existing.attachments || existing.attachments.every((item) => item.decryptionError)) && archivedMessage.attachments?.length) {
+      merged.set(archivedMessage.messageId, {
+        ...existing,
+        attachments: archivedMessage.attachments,
+      });
+    }
+  }
+  return normalizeConversationMessages([...merged.values()])
+    .sort((a, b) => Number(a.messageId) - Number(b.messageId));
 }
 
 function getActiveMessages() {
@@ -2426,11 +3195,13 @@ function resetSession() {
   state.messages = new Map();
   state.profiles = new Map();
   state.identity = null;
+  state.archiveIdentity = null;
   state.identityKeys = new Map();
   state.groupKeys = new Map();
   state.mediaCache = new Map();
   state.encryptionPrefs = new Map();
   state.e2eeReady = false;
+  state.archiveSequence = 0;
   state.pendingAttachments = [];
   state.activeConversationId = "";
   state.activePeer = "";

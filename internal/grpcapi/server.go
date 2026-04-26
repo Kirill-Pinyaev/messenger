@@ -3,9 +3,11 @@ package grpcapi
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,6 +26,31 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+var multiDeviceMarker = []byte("__multi_device__")
+var errDirectMessageUnavailableForDevice = errors.New("direct message unavailable for device")
+
+type storedDirectEnvelope struct {
+	TargetUsername              string `json:"target_username"`
+	TargetDeviceID              string `json:"target_device_id"`
+	Ciphertext                  []byte `json:"ciphertext"`
+	Nonce                       []byte `json:"nonce"`
+	RecipientSignedPrekeyID     string `json:"recipient_signed_prekey_id"`
+	RecipientSignedPrekeyPublic []byte `json:"recipient_signed_prekey_public"`
+	RecipientOneTimePrekeyID    string `json:"recipient_one_time_prekey_id"`
+	RecipientOneTimePrekeyPublic []byte `json:"recipient_one_time_prekey_public"`
+}
+
+type storedAttachmentDirectEnvelope struct {
+	TargetUsername      string `json:"target_username"`
+	TargetDeviceID      string `json:"target_device_id"`
+	EncryptedDescriptor []byte `json:"encrypted_descriptor"`
+	DescriptorNonce     []byte `json:"descriptor_nonce"`
+	RecipientSignedPrekeyID     string `json:"recipient_signed_prekey_id"`
+	RecipientSignedPrekeyPublic []byte `json:"recipient_signed_prekey_public"`
+	RecipientOneTimePrekeyID    string `json:"recipient_one_time_prekey_id"`
+	RecipientOneTimePrekeyPublic []byte `json:"recipient_one_time_prekey_public"`
+}
+
 type Server struct {
 	messengerv1.UnimplementedAuthServiceServer
 	messengerv1.UnimplementedUserServiceServer
@@ -34,18 +61,20 @@ type Server struct {
 	msgStore  store.MessageStore
 	convStore store.ConversationStore
 	keyStore  store.KeyStore
+	archiveStore store.ArchiveStore
 	groupState store.GroupStateStore
 	mediaRoot string
 	hub       *eventHub
 }
 
-func NewServer(authSvc *auth.Service, userStore store.UserStore, msgStore store.MessageStore, convStore store.ConversationStore, keyStore store.KeyStore) *Server {
+func NewServer(authSvc *auth.Service, userStore store.UserStore, msgStore store.MessageStore, convStore store.ConversationStore, keyStore store.KeyStore, archiveStore store.ArchiveStore) *Server {
 	return &Server{
 		authSvc:   authSvc,
 		userStore: userStore,
 		msgStore:  msgStore,
 		convStore: convStore,
 		keyStore:  keyStore,
+		archiveStore: archiveStore,
 		groupState: store.NewGroupStateStore(convStore, keyStore),
 		mediaRoot: defaultMediaRoot(),
 		hub:       newEventHub(),
@@ -70,11 +99,11 @@ func (s *Server) Register(ctx context.Context, req *messengerv1.RegisterRequest)
 }
 
 func (s *Server) Login(ctx context.Context, req *messengerv1.LoginRequest) (*messengerv1.LoginResponse, error) {
-	token, err := s.authSvc.Login(req.GetUsername(), req.GetPassword())
+	token, err := s.authSvc.Login(req.GetUsername(), req.GetPassword(), req.GetDeviceId())
 	if err != nil {
 		return nil, mapAuthErr(err)
 	}
-	return &messengerv1.LoginResponse{Token: token}, nil
+	return &messengerv1.LoginResponse{Token: token, DeviceId: req.GetDeviceId()}, nil
 }
 
 func (s *Server) DeleteAccount(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
@@ -96,6 +125,11 @@ func (s *Server) DeleteAccount(ctx context.Context, _ *emptypb.Empty) (*emptypb.
 	}
 	if err := s.keyStore.DeleteUser(ctx, username); err != nil {
 		return nil, status.Error(codes.Internal, "failed to delete keys")
+	}
+	if s.archiveStore != nil {
+		if err := s.archiveStore.DeleteUser(ctx, username); err != nil {
+			return nil, status.Error(codes.Internal, "failed to delete history archive")
+		}
 	}
 	if err := s.authSvc.DeleteAccount(ctx, username); err != nil {
 		return nil, status.Error(codes.Internal, "failed to delete user")
@@ -175,13 +209,14 @@ func (s *Server) SearchUsers(ctx context.Context, req *messengerv1.SearchUsersRe
 }
 
 func (s *Server) PublishIdentityKey(ctx context.Context, req *messengerv1.PublishIdentityKeyRequest) (*messengerv1.IdentityKey, error) {
-	username, _, err := s.requireAuth(ctx)
+	username, deviceID, err := s.requireAuth(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	key, err := s.keyStore.UpsertIdentityKey(ctx, store.IdentityKey{
 		Username:  username,
+		DeviceID:  deviceID,
 		KeyID:     req.GetKeyId(),
 		Algorithm: req.GetAlgorithm(),
 		PublicKey: req.GetPublicKey(),
@@ -196,11 +231,16 @@ func (s *Server) PublishIdentityKey(ctx context.Context, req *messengerv1.Publis
 }
 
 func (s *Server) GetIdentityKey(ctx context.Context, req *messengerv1.GetIdentityKeyRequest) (*messengerv1.IdentityKey, error) {
-	if _, _, err := s.requireAuth(ctx); err != nil {
+	sessionUsername, sessionDeviceID, err := s.requireAuth(ctx)
+	if err != nil {
 		return nil, err
 	}
 
-	key, err := s.keyStore.GetIdentityKey(ctx, req.GetUsername())
+	deviceID := strings.TrimSpace(req.GetDeviceId())
+	if deviceID == "" && req.GetUsername() == sessionUsername {
+		deviceID = sessionDeviceID
+	}
+	key, err := s.keyStore.GetIdentityKey(ctx, req.GetUsername(), deviceID)
 	if err != nil {
 		if errors.Is(err, store.ErrIdentityKeyNotFound) {
 			return nil, status.Error(codes.NotFound, "identity key not found")
@@ -230,19 +270,19 @@ func (s *Server) GetIdentityKeys(ctx context.Context, req *messengerv1.GetIdenti
 }
 
 func (s *Server) PublishPrekeyBundle(ctx context.Context, req *messengerv1.PublishPrekeyBundleRequest) (*messengerv1.PrekeyBundle, error) {
-	username, _, err := s.requireAuth(ctx)
+	username, deviceID, err := s.requireAuth(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	identity, err := s.keyStore.GetIdentityKey(ctx, username)
+	identity, err := s.keyStore.GetIdentityKey(ctx, username, deviceID)
 	if err != nil {
 		if errors.Is(err, store.ErrIdentityKeyNotFound) {
 			return nil, status.Error(codes.FailedPrecondition, "identity key must be published first")
 		}
 		return nil, status.Error(codes.Internal, "failed to load identity key")
 	}
-	existingSignedPrekey, err := s.keyStore.GetSignedPrekey(ctx, username)
+	existingSignedPrekey, err := s.keyStore.GetSignedPrekey(ctx, username, deviceID)
 	if err != nil && !errors.Is(err, store.ErrSignedPrekeyNotFound) && !errors.Is(err, store.ErrBadInput) {
 		return nil, status.Error(codes.Internal, "failed to load signed prekey")
 	}
@@ -250,6 +290,7 @@ func (s *Server) PublishPrekeyBundle(ctx context.Context, req *messengerv1.Publi
 
 	signedPrekey, err := s.keyStore.UpsertSignedPrekey(ctx, store.SignedPrekey{
 		Username:  username,
+		DeviceID:  deviceID,
 		KeyID:     req.GetSignedPrekeyId(),
 		Algorithm: req.GetSignedPrekeyAlgorithm(),
 		PublicKey: req.GetSignedPrekeyPublicKey(),
@@ -265,17 +306,18 @@ func (s *Server) PublishPrekeyBundle(ctx context.Context, req *messengerv1.Publi
 	for _, item := range req.GetOneTimePrekeys() {
 		oneTimePrekeys = append(oneTimePrekeys, store.OneTimePrekey{
 			Username:  username,
+			DeviceID:  deviceID,
 			KeyID:     item.GetKeyId(),
 			Algorithm: item.GetAlgorithm(),
 			PublicKey: item.GetPublicKey(),
 		})
 	}
 	if resetOTPQueue {
-		if err := s.keyStore.DeleteOneTimePrekeys(ctx, username); err != nil {
+		if err := s.keyStore.DeleteOneTimePrekeys(ctx, username, deviceID); err != nil {
 			return nil, status.Error(codes.Internal, "failed to reset one-time prekeys")
 		}
 	}
-	if err := s.keyStore.PutOneTimePrekeys(ctx, username, oneTimePrekeys); err != nil {
+	if err := s.keyStore.PutOneTimePrekeys(ctx, username, deviceID, oneTimePrekeys); err != nil {
 		if errors.Is(err, store.ErrBadInput) {
 			return nil, status.Error(codes.InvalidArgument, "bad request")
 		}
@@ -284,9 +326,74 @@ func (s *Server) PublishPrekeyBundle(ctx context.Context, req *messengerv1.Publi
 
 	return prekeyBundleToProto(store.PrekeyBundle{
 		Username:     username,
+		DeviceID:     deviceID,
 		IdentityKey:  identity,
 		SignedPrekey: signedPrekey,
 	}), nil
+}
+
+func (s *Server) InitializeHistoryArchive(ctx context.Context, req *messengerv1.InitializeHistoryArchiveRequest) (*messengerv1.HistoryArchiveHeader, error) {
+	username, _, err := s.requireAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.archiveStore == nil {
+		return nil, status.Error(codes.Unimplemented, "history archive is not configured")
+	}
+	header, err := s.archiveStore.InitializeHeader(ctx, store.ArchiveKeyBundle{
+		Username:            username,
+		PublicKey:           req.GetPublicKey(),
+		EncryptedPrivateKey: req.GetEncryptedPrivateKey(),
+		KDFSalt:             req.GetKdfSalt(),
+		KDFParams:           req.GetKdfParams(),
+		Version:             req.GetVersion(),
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad archive header")
+		}
+		return nil, status.Error(codes.Internal, "failed to initialize history archive")
+	}
+	return archiveHeaderToProto(header), nil
+}
+
+func (s *Server) GetHistoryArchiveHeader(ctx context.Context, _ *emptypb.Empty) (*messengerv1.HistoryArchiveHeader, error) {
+	username, _, err := s.requireAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.archiveStore == nil {
+		return nil, status.Error(codes.Unimplemented, "history archive is not configured")
+	}
+	header, err := s.archiveStore.GetHeader(ctx, username)
+	if err != nil {
+		if errors.Is(err, store.ErrArchiveHeaderNotFound) {
+			return nil, status.Error(codes.NotFound, "history archive header not found")
+		}
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad request")
+		}
+		return nil, status.Error(codes.Internal, "failed to load history archive header")
+	}
+	return archiveHeaderToProto(header), nil
+}
+
+func (s *Server) GetArchivePublicKeys(ctx context.Context, req *messengerv1.GetArchivePublicKeysRequest) (*messengerv1.GetArchivePublicKeysResponse, error) {
+	if _, _, err := s.requireAuth(ctx); err != nil {
+		return nil, err
+	}
+	if s.archiveStore == nil {
+		return nil, status.Error(codes.Unimplemented, "history archive is not configured")
+	}
+	keys, err := s.archiveStore.GetPublicKeys(ctx, req.GetUsernames())
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to load archive public keys")
+	}
+	items := make([]*messengerv1.ArchiveKeyBundle, 0, len(keys))
+	for _, item := range keys {
+		items = append(items, archiveKeyBundleToProto(item, false))
+	}
+	return &messengerv1.GetArchivePublicKeysResponse{Items: items}, nil
 }
 
 func (s *Server) AcquirePrekeyBundle(ctx context.Context, req *messengerv1.AcquirePrekeyBundleRequest) (*messengerv1.PrekeyBundle, error) {
@@ -294,7 +401,17 @@ func (s *Server) AcquirePrekeyBundle(ctx context.Context, req *messengerv1.Acqui
 		return nil, err
 	}
 
-	bundle, err := s.keyStore.AcquirePrekeyBundle(ctx, req.GetUsername())
+	bundles, err := s.keyStore.AcquirePrekeyBundles(ctx, req.GetUsername())
+	if err != nil {
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad request")
+		}
+		return nil, status.Error(codes.Internal, "failed to acquire prekey bundle")
+	}
+	if len(bundles) == 0 {
+		return nil, status.Error(codes.NotFound, "prekey bundle not found")
+	}
+	bundle, err := s.keyStore.AcquirePrekeyBundle(ctx, req.GetUsername(), bundles[0].DeviceID)
 	if err != nil {
 		if errors.Is(err, store.ErrIdentityKeyNotFound) || errors.Is(err, store.ErrSignedPrekeyNotFound) {
 			return nil, status.Error(codes.NotFound, "prekey bundle not found")
@@ -305,6 +422,25 @@ func (s *Server) AcquirePrekeyBundle(ctx context.Context, req *messengerv1.Acqui
 		return nil, status.Error(codes.Internal, "failed to acquire prekey bundle")
 	}
 	return prekeyBundleToProto(bundle), nil
+}
+
+func (s *Server) AcquirePrekeyBundles(ctx context.Context, req *messengerv1.AcquirePrekeyBundlesRequest) (*messengerv1.AcquirePrekeyBundlesResponse, error) {
+	if _, _, err := s.requireAuth(ctx); err != nil {
+		return nil, err
+	}
+
+	bundles, err := s.keyStore.AcquirePrekeyBundles(ctx, req.GetUsername())
+	if err != nil {
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad request")
+		}
+		return nil, status.Error(codes.Internal, "failed to acquire prekey bundles")
+	}
+	out := make([]*messengerv1.PrekeyBundle, 0, len(bundles))
+	for _, bundle := range bundles {
+		out = append(out, prekeyBundleToProto(bundle))
+	}
+	return &messengerv1.AcquirePrekeyBundlesResponse{Items: out}, nil
 }
 
 func (s *Server) ListConversations(ctx context.Context, _ *emptypb.Empty) (*messengerv1.ListConversationsResponse, error) {
@@ -420,6 +556,18 @@ func (s *Server) CreateGroupConversation(ctx context.Context, req *messengerv1.C
 		}
 		return nil, status.Error(codes.Internal, "failed to create group")
 	}
+	if req.GetInitialKey() != nil && len(req.GetInitialKey().GetArchiveRecords()) > 0 && s.archiveStore != nil {
+		archiveRecords, err := s.archiveRecordsFromProto(req.GetInitialKey().GetArchiveRecords(), conversation.ID, username, conversation.MemberUsernames())
+		if err != nil {
+			return nil, err
+		}
+		if err := s.archiveStore.AppendRecords(ctx, archiveRecords); err != nil {
+			if errors.Is(err, store.ErrBadInput) {
+				return nil, status.Error(codes.InvalidArgument, "bad archive record")
+			}
+			return nil, status.Error(codes.Internal, "failed to save history archive")
+		}
+	}
 	s.hub.publishUsers(conversation.MemberUsernames(), newConversationEvent(conversationToProto(conversation)))
 	return conversationToProto(conversation), nil
 }
@@ -472,6 +620,18 @@ func (s *Server) AddGroupMembers(ctx context.Context, req *messengerv1.AddGroupM
 		}
 		return nil, status.Error(codes.Internal, "failed to add members")
 	}
+	if req.GetNextKey() != nil && len(req.GetNextKey().GetArchiveRecords()) > 0 && s.archiveStore != nil {
+		archiveRecords, err := s.archiveRecordsFromProto(req.GetNextKey().GetArchiveRecords(), updated.ID, username, updated.MemberUsernames())
+		if err != nil {
+			return nil, err
+		}
+		if err := s.archiveStore.AppendRecords(ctx, archiveRecords); err != nil {
+			if errors.Is(err, store.ErrBadInput) {
+				return nil, status.Error(codes.InvalidArgument, "bad archive record")
+			}
+			return nil, status.Error(codes.Internal, "failed to save history archive")
+		}
+	}
 	s.hub.publishUsers(updated.MemberUsernames(), newConversationEvent(conversationToProto(updated)))
 	return conversationToProto(updated), nil
 }
@@ -512,6 +672,18 @@ func (s *Server) RemoveGroupMember(ctx context.Context, req *messengerv1.RemoveG
 		}
 		return nil, status.Error(codes.Internal, "failed to remove member")
 	}
+	if req.GetNextKey() != nil && len(req.GetNextKey().GetArchiveRecords()) > 0 && s.archiveStore != nil {
+		archiveRecords, err := s.archiveRecordsFromProto(req.GetNextKey().GetArchiveRecords(), updated.ID, username, updated.MemberUsernames())
+		if err != nil {
+			return nil, err
+		}
+		if err := s.archiveStore.AppendRecords(ctx, archiveRecords); err != nil {
+			if errors.Is(err, store.ErrBadInput) {
+				return nil, status.Error(codes.InvalidArgument, "bad archive record")
+			}
+			return nil, status.Error(codes.Internal, "failed to save history archive")
+		}
+	}
 	s.publishConversationSync(conversation.MemberUsernames(), updated)
 	return conversationToProto(updated), nil
 }
@@ -548,6 +720,18 @@ func (s *Server) LeaveGroupConversation(ctx context.Context, req *messengerv1.Le
 			return nil, status.Error(codes.PermissionDenied, "not allowed")
 		}
 		return nil, status.Error(codes.Internal, "failed to leave conversation")
+	}
+	if req.GetNextKey() != nil && len(req.GetNextKey().GetArchiveRecords()) > 0 && s.archiveStore != nil {
+		archiveRecords, err := s.archiveRecordsFromProto(req.GetNextKey().GetArchiveRecords(), updated.ID, username, updated.MemberUsernames())
+		if err != nil {
+			return nil, err
+		}
+		if err := s.archiveStore.AppendRecords(ctx, archiveRecords); err != nil {
+			if errors.Is(err, store.ErrBadInput) {
+				return nil, status.Error(codes.InvalidArgument, "bad archive record")
+			}
+			return nil, status.Error(codes.Internal, "failed to save history archive")
+		}
 	}
 
 	s.publishConversationSync(conversation.MemberUsernames(), updated)
@@ -610,6 +794,7 @@ func (s *Server) UpsertConversationKey(ctx context.Context, req *messengerv1.Ups
 	for _, envelope := range req.GetEnvelopes() {
 		envelopes = append(envelopes, store.ConversationKeyEnvelope{
 			Username:       envelope.GetUsername(),
+			DeviceID:       envelope.GetDeviceId(),
 			EncryptedKey:   envelope.GetEncryptedKey(),
 			Nonce:          envelope.GetNonce(),
 			SenderKeyID:    envelope.GetSenderKeyId(),
@@ -629,6 +814,18 @@ func (s *Server) UpsertConversationKey(ctx context.Context, req *messengerv1.Ups
 			return nil, status.Error(codes.InvalidArgument, "bad request")
 		}
 		return nil, status.Error(codes.Internal, "failed to upsert conversation key")
+	}
+	if len(req.GetArchiveRecords()) > 0 && s.archiveStore != nil {
+		archiveRecords, err := s.archiveRecordsFromProto(req.GetArchiveRecords(), req.GetConversationId(), username, conversation.MemberUsernames())
+		if err != nil {
+			return nil, err
+		}
+		if err := s.archiveStore.AppendRecords(ctx, archiveRecords); err != nil {
+			if errors.Is(err, store.ErrBadInput) {
+				return nil, status.Error(codes.InvalidArgument, "bad archive record")
+			}
+			return nil, status.Error(codes.Internal, "failed to save history archive")
+		}
 	}
 	return conversationKeyToProto(key), nil
 }
@@ -664,15 +861,15 @@ func (s *Server) GetConversationKey(ctx context.Context, req *messengerv1.GetCon
 }
 
 func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRequest) (*messengerv1.Message, error) {
-	username, _, err := s.requireAuth(ctx)
+	username, deviceID, err := s.requireAuth(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if !req.GetEncrypted() && req.GetText() == "" && len(req.GetAttachments()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "text or attachments are required")
 	}
-	if req.GetEncrypted() && len(req.GetCiphertext()) == 0 && req.GetText() == "" && len(req.GetAttachments()) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "ciphertext, text or attachments are required")
+	if req.GetEncrypted() && len(req.GetCiphertext()) == 0 && req.GetText() == "" && len(req.GetAttachments()) == 0 && len(req.GetDirectEnvelopes()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "ciphertext, direct envelopes, text or attachments are required")
 	}
 	if req.GetEncrypted() && len(req.GetCiphertext()) > 0 && (len(req.GetNonce()) == 0 || req.GetSenderKeyId() == "") {
 		return nil, status.Error(codes.InvalidArgument, "ciphertext, nonce and sender_key_id are required")
@@ -704,11 +901,29 @@ func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRe
 		participants = append(participants, recipient)
 	}
 
+	ciphertextToStore := req.GetCiphertext()
+	nonceToStore := req.GetNonce()
+
 	attachments := make([]store.Attachment, 0, len(req.GetAttachments()))
 	for _, item := range req.GetAttachments() {
 		kind, err := attachmentKindFromProto(item.GetKind())
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, "bad attachment kind")
+		}
+		encryptedDescriptor := item.GetEncryptedDescriptor()
+		descriptorNonce := item.GetDescriptorNonce()
+		directEnvelopes := make([]store.AttachmentDirectEnvelope, 0, len(item.GetDirectEnvelopes()))
+		for _, envelope := range item.GetDirectEnvelopes() {
+			directEnvelopes = append(directEnvelopes, store.AttachmentDirectEnvelope{
+				TargetUsername:               envelope.GetTargetUsername(),
+				TargetDeviceID:               envelope.GetTargetDeviceId(),
+				EncryptedDescriptor:          envelope.GetEncryptedDescriptor(),
+				DescriptorNonce:              envelope.GetDescriptorNonce(),
+				RecipientSignedPrekeyID:      envelope.GetRecipientSignedPrekeyId(),
+				RecipientSignedPrekeyPublic:  envelope.GetRecipientSignedPrekeyPublic(),
+				RecipientOneTimePrekeyID:     envelope.GetRecipientOneTimePrekeyId(),
+				RecipientOneTimePrekeyPublic: envelope.GetRecipientOneTimePrekeyPublic(),
+			})
 		}
 		attachments = append(attachments, store.Attachment{
 			AttachmentID:        item.GetAttachmentId(),
@@ -717,12 +932,27 @@ func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRe
 			MimeType:            item.GetMimeType(),
 			SizeBytes:           item.GetSizeBytes(),
 			MediaID:             item.GetMediaId(),
-			EncryptedDescriptor: item.GetEncryptedDescriptor(),
-			DescriptorNonce:     item.GetDescriptorNonce(),
+			EncryptedDescriptor: encryptedDescriptor,
+			DescriptorNonce:     descriptorNonce,
 			SHA256:              item.GetSha256(),
 			CiphertextSize:      item.GetCiphertextSize(),
 			PreviewWidth:        item.GetPreview().GetWidth(),
 			PreviewHeight:       item.GetPreview().GetHeight(),
+			DirectEnvelopes:     directEnvelopes,
+		})
+	}
+
+	directEnvelopes := make([]store.DirectEnvelope, 0, len(req.GetDirectEnvelopes()))
+	for _, envelope := range req.GetDirectEnvelopes() {
+		directEnvelopes = append(directEnvelopes, store.DirectEnvelope{
+			TargetUsername:               envelope.GetTargetUsername(),
+			TargetDeviceID:               envelope.GetTargetDeviceId(),
+			Ciphertext:                   envelope.GetCiphertext(),
+			Nonce:                        envelope.GetNonce(),
+			RecipientSignedPrekeyID:      envelope.GetRecipientSignedPrekeyId(),
+			RecipientSignedPrekeyPublic:  envelope.GetRecipientSignedPrekeyPublic(),
+			RecipientOneTimePrekeyID:     envelope.GetRecipientOneTimePrekeyId(),
+			RecipientOneTimePrekeyPublic: envelope.GetRecipientOneTimePrekeyPublic(),
 		})
 	}
 
@@ -730,9 +960,10 @@ func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRe
 		ConversationID: convID,
 		From:           username,
 		To:             recipient,
+		SenderDeviceID: deviceID,
 		Text:           req.GetText(),
-		Ciphertext:     req.GetCiphertext(),
-		Nonce:          req.GetNonce(),
+		Ciphertext:     ciphertextToStore,
+		Nonce:          nonceToStore,
 		SenderKeyID:    req.GetSenderKeyId(),
 		KeyVersion:     req.GetConversationKeyVersion(),
 		Encrypted:      req.GetEncrypted(),
@@ -740,24 +971,45 @@ func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRe
 		RecipientSignedPrekeyPublic: req.GetRecipientSignedPrekeyPublic(),
 		RecipientOneTimePrekeyID: req.GetRecipientOneTimePrekeyId(),
 		RecipientOneTimePrekeyPublic: req.GetRecipientOneTimePrekeyPublic(),
+		DirectEnvelopes: directEnvelopes,
 		Attachments:    attachments,
 		TS:             now,
 	})
 	if err != nil {
+		log.Printf("failed to save message: conv=%s from=%s to=%s encrypted=%t direct_envelopes=%d attachments=%d err=%v", convID, username, recipient, req.GetEncrypted(), len(directEnvelopes), len(attachments), err)
 		if errors.Is(err, store.ErrBadInput) {
 			return nil, status.Error(codes.InvalidArgument, "bad message")
 		}
 		return nil, status.Error(codes.Internal, "failed to save message")
 	}
 
-	msg := messageFromStore(saved)
-	event := newMessageEvent(msg)
-	s.hub.publishUsers(participants, event)
+	msg, err := s.projectMessageForDevice(saved, username, deviceID)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to project message")
+	}
+	if len(req.GetArchiveRecords()) > 0 && s.archiveStore != nil {
+		archiveRecords, err := s.archiveRecordsFromProto(req.GetArchiveRecords(), convID, username, participants)
+		if err != nil {
+			return nil, err
+		}
+		for i := range archiveRecords {
+			if archiveRecords[i].MessageID == 0 {
+				archiveRecords[i].MessageID = saved.ID
+			}
+		}
+		if err := s.archiveStore.AppendRecords(ctx, archiveRecords); err != nil {
+			if errors.Is(err, store.ErrBadInput) {
+				return nil, status.Error(codes.InvalidArgument, "bad archive record")
+			}
+			return nil, status.Error(codes.Internal, "failed to save history archive")
+		}
+	}
+	s.hub.publishMessageUsers(participants, saved, s.projectMessageForDevice)
 	return msg, nil
 }
 
 func (s *Server) GetMessages(ctx context.Context, req *messengerv1.GetMessagesRequest) (*messengerv1.GetMessagesResponse, error) {
-	username, _, err := s.requireAuth(ctx)
+	username, deviceID, err := s.requireAuth(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -787,7 +1039,15 @@ func (s *Server) GetMessages(ctx context.Context, req *messengerv1.GetMessagesRe
 
 	items := make([]*messengerv1.Message, 0, len(msgs))
 	for _, msg := range msgs {
-		items = append(items, messageFromStore(msg))
+		projected, err := s.projectMessageForDevice(msg, username, deviceID)
+		if err != nil {
+			if errors.Is(err, errDirectMessageUnavailableForDevice) {
+				items = append(items, unavailableDirectMessage(msg))
+				continue
+			}
+			return nil, status.Error(codes.Internal, "failed to project messages")
+		}
+		items = append(items, projected)
 	}
 	return &messengerv1.GetMessagesResponse{Items: items}, nil
 }
@@ -848,6 +1108,52 @@ func (s *Server) DeleteMessage(ctx context.Context, req *messengerv1.DeleteMessa
 	}
 	s.hub.publishUsers(recipients, newMessageDeletedEvent(req.GetMessageId(), msg.ConversationID))
 	return &emptypb.Empty{}, nil
+}
+
+func (s *Server) AppendHistoryArchiveRecords(ctx context.Context, req *messengerv1.AppendHistoryArchiveRecordsRequest) (*emptypb.Empty, error) {
+	username, _, err := s.requireAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.archiveStore == nil {
+		return nil, status.Error(codes.Unimplemented, "history archive is not configured")
+	}
+	records := make([]store.HistoryArchiveRecord, 0, len(req.GetItems()))
+	for _, item := range req.GetItems() {
+		if item.GetOwnerUsername() != username || item.GetSender() != username {
+			return nil, status.Error(codes.PermissionDenied, "not allowed to append archive records for another user")
+		}
+		records = append(records, historyArchiveRecordFromProto(item))
+	}
+	if err := s.archiveStore.AppendRecords(ctx, records); err != nil {
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad archive record")
+		}
+		return nil, status.Error(codes.Internal, "failed to append archive records")
+	}
+	return &emptypb.Empty{}, nil
+}
+
+func (s *Server) ListHistoryArchiveRecords(ctx context.Context, req *messengerv1.ListHistoryArchiveRecordsRequest) (*messengerv1.ListHistoryArchiveRecordsResponse, error) {
+	username, _, err := s.requireAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.archiveStore == nil {
+		return nil, status.Error(codes.Unimplemented, "history archive is not configured")
+	}
+	records, err := s.archiveStore.ListRecords(ctx, username, req.GetAfterSequence(), int(req.GetLimit()))
+	if err != nil {
+		if errors.Is(err, store.ErrBadInput) {
+			return nil, status.Error(codes.InvalidArgument, "bad request")
+		}
+		return nil, status.Error(codes.Internal, "failed to list archive records")
+	}
+	items := make([]*messengerv1.HistoryArchiveRecord, 0, len(records))
+	for _, item := range records {
+		items = append(items, historyArchiveRecordToProto(item))
+	}
+	return &messengerv1.ListHistoryArchiveRecordsResponse{Items: items}, nil
 }
 
 func (s *Server) PrepareMediaUpload(ctx context.Context, req *messengerv1.PrepareMediaUploadRequest) (*messengerv1.PrepareMediaUploadResponse, error) {
@@ -987,7 +1293,7 @@ func (s *Server) GetMedia(ctx context.Context, req *messengerv1.GetMediaRequest)
 }
 
 func (s *Server) StreamEvents(req *messengerv1.StreamEventsRequest, stream messengerv1.MessageService_StreamEventsServer) error {
-	username, _, err := s.requireAuth(stream.Context())
+	username, deviceID, err := s.requireAuth(stream.Context())
 	if err != nil {
 		return err
 	}
@@ -995,7 +1301,7 @@ func (s *Server) StreamEvents(req *messengerv1.StreamEventsRequest, stream messe
 		req = &messengerv1.StreamEventsRequest{}
 	}
 
-	events, unsubscribe := s.hub.subscribe(username)
+	events, unsubscribe := s.hub.subscribe(username, deviceID)
 	defer unsubscribe()
 
 	for {
@@ -1019,13 +1325,13 @@ func (s *Server) StreamEvents(req *messengerv1.StreamEventsRequest, stream messe
 	}
 }
 
-func (s *Server) requireAuth(ctx context.Context) (username string, token string, err error) {
+func (s *Server) requireAuth(ctx context.Context) (username string, deviceID string, err error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return "", "", status.Error(codes.Unauthenticated, "missing metadata")
 	}
 
-	token = firstMetadata(md, "authorization")
+	token := firstMetadata(md, "authorization")
 	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
 		token = strings.TrimSpace(token[7:])
 	}
@@ -1036,11 +1342,11 @@ func (s *Server) requireAuth(ctx context.Context) (username string, token string
 		return "", "", status.Error(codes.Unauthenticated, "missing token")
 	}
 
-	username, ok = s.authSvc.UsernameForToken(token)
+	session, ok := s.authSvc.SessionForToken(token)
 	if !ok {
 		return "", "", status.Error(codes.Unauthenticated, "unauthorized")
 	}
-	return username, token, nil
+	return session.Username, session.DeviceID, nil
 }
 
 func firstMetadata(md metadata.MD, key string) string {
@@ -1116,6 +1422,7 @@ func messageFromStore(msg store.Message) *messengerv1.Message {
 		ConversationId:         msg.ConversationID,
 		From:                   msg.From,
 		To:                     msg.To,
+		SenderDeviceId:         msg.SenderDeviceID,
 		Text:                   msg.Text,
 		CreatedAt:              timestamppb.New(msg.TS),
 		Ciphertext:             msg.Ciphertext,
@@ -1129,6 +1436,196 @@ func messageFromStore(msg store.Message) *messengerv1.Message {
 		RecipientOneTimePrekeyPublic: msg.RecipientOneTimePrekeyPublic,
 		Attachments:            attachments,
 	}
+}
+
+func (s *Server) projectMessageForDevice(msg store.Message, username, deviceID string) (*messengerv1.Message, error) {
+	projected := msg
+	projected.Attachments = cloneStoreAttachments(msg.Attachments)
+
+	isDirectEncrypted := msg.Encrypted && msg.To != msg.ConversationID
+
+	if isDirectEncrypted && (len(msg.DirectEnvelopes) > 0 || slices.Equal(msg.Nonce, multiDeviceMarker)) {
+		envelopes := msg.DirectEnvelopes
+		if len(envelopes) == 0 {
+			legacy, err := decodeDirectEnvelopes(msg.Ciphertext)
+			if err != nil {
+				return nil, err
+			}
+			envelopes = make([]store.DirectEnvelope, 0, len(legacy))
+			for _, item := range legacy {
+				envelopes = append(envelopes, store.DirectEnvelope{
+					TargetUsername:               item.TargetUsername,
+					TargetDeviceID:               item.TargetDeviceID,
+					Ciphertext:                   item.Ciphertext,
+					Nonce:                        item.Nonce,
+					RecipientSignedPrekeyID:      item.RecipientSignedPrekeyID,
+					RecipientSignedPrekeyPublic:  item.RecipientSignedPrekeyPublic,
+					RecipientOneTimePrekeyID:     item.RecipientOneTimePrekeyID,
+					RecipientOneTimePrekeyPublic: item.RecipientOneTimePrekeyPublic,
+				})
+			}
+		}
+		envelope, ok := pickDirectEnvelope(envelopes, msg, username, deviceID)
+		if !ok {
+			log.Printf("direct projection unavailable: msg_id=%d conv=%s viewer=%s viewer_device=%s sender=%s sender_device=%s recipient=%s direct_envelopes=%d",
+				msg.ID, msg.ConversationID, username, deviceID, msg.From, msg.SenderDeviceID, msg.To, len(envelopes))
+			return nil, errDirectMessageUnavailableForDevice
+		}
+		projected.Ciphertext = envelope.Ciphertext
+		projected.Nonce = envelope.Nonce
+		projected.RecipientSignedPrekeyID = envelope.RecipientSignedPrekeyID
+		projected.RecipientSignedPrekeyPublic = envelope.RecipientSignedPrekeyPublic
+		projected.RecipientOneTimePrekeyID = envelope.RecipientOneTimePrekeyID
+		projected.RecipientOneTimePrekeyPublic = envelope.RecipientOneTimePrekeyPublic
+	}
+
+	if isDirectEncrypted {
+		for i := range projected.Attachments {
+			if len(projected.Attachments[i].DirectEnvelopes) == 0 && !slices.Equal(projected.Attachments[i].DescriptorNonce, multiDeviceMarker) {
+				continue
+			}
+			attachmentEnvelopes := projected.Attachments[i].DirectEnvelopes
+			if len(attachmentEnvelopes) == 0 {
+				legacy, err := decodeAttachmentDirectEnvelopes(projected.Attachments[i].EncryptedDescriptor)
+				if err != nil {
+					return nil, err
+				}
+				attachmentEnvelopes = make([]store.AttachmentDirectEnvelope, 0, len(legacy))
+				for _, item := range legacy {
+					attachmentEnvelopes = append(attachmentEnvelopes, store.AttachmentDirectEnvelope{
+						TargetUsername:               item.TargetUsername,
+						TargetDeviceID:               item.TargetDeviceID,
+						EncryptedDescriptor:          item.EncryptedDescriptor,
+						DescriptorNonce:              item.DescriptorNonce,
+						RecipientSignedPrekeyID:      item.RecipientSignedPrekeyID,
+						RecipientSignedPrekeyPublic:  item.RecipientSignedPrekeyPublic,
+						RecipientOneTimePrekeyID:     item.RecipientOneTimePrekeyID,
+						RecipientOneTimePrekeyPublic: item.RecipientOneTimePrekeyPublic,
+					})
+				}
+			}
+			attachmentEnvelope, ok := pickAttachmentDirectEnvelope(attachmentEnvelopes, msg, username, deviceID)
+			if !ok {
+				log.Printf("attachment projection unavailable: msg_id=%d conv=%s viewer=%s viewer_device=%s sender=%s sender_device=%s recipient=%s attachment_id=%s attachment_envelopes=%d",
+					msg.ID, msg.ConversationID, username, deviceID, msg.From, msg.SenderDeviceID, msg.To, projected.Attachments[i].AttachmentID, len(attachmentEnvelopes))
+				return nil, errDirectMessageUnavailableForDevice
+			}
+			projected.Attachments[i].EncryptedDescriptor = attachmentEnvelope.EncryptedDescriptor
+			projected.Attachments[i].DescriptorNonce = attachmentEnvelope.DescriptorNonce
+			if projected.RecipientSignedPrekeyID == "" {
+				projected.RecipientSignedPrekeyID = attachmentEnvelope.RecipientSignedPrekeyID
+				projected.RecipientSignedPrekeyPublic = attachmentEnvelope.RecipientSignedPrekeyPublic
+				projected.RecipientOneTimePrekeyID = attachmentEnvelope.RecipientOneTimePrekeyID
+				projected.RecipientOneTimePrekeyPublic = attachmentEnvelope.RecipientOneTimePrekeyPublic
+			}
+		}
+	}
+	return messageFromStore(projected), nil
+}
+
+func unavailableDirectMessage(msg store.Message) *messengerv1.Message {
+	return &messengerv1.Message{
+		MessageId:      msg.ID,
+		ConversationId: msg.ConversationID,
+		From:           msg.From,
+		To:             msg.To,
+		Text:           "[Сообщение недоступно на этом устройстве]",
+		CreatedAt:      timestamppb.New(msg.TS),
+		Encrypted:      false,
+	}
+}
+
+func cloneStoreAttachments(items []store.Attachment) []store.Attachment {
+	out := make([]store.Attachment, len(items))
+	copy(out, items)
+	for i := range out {
+		out[i].EncryptedDescriptor = append([]byte(nil), out[i].EncryptedDescriptor...)
+		out[i].DescriptorNonce = append([]byte(nil), out[i].DescriptorNonce...)
+		out[i].SHA256 = append([]byte(nil), out[i].SHA256...)
+	}
+	return out
+}
+
+func encodeDirectEnvelopes(items []*messengerv1.DirectMessageEnvelope) ([]byte, error) {
+	envelopes := make([]storedDirectEnvelope, 0, len(items))
+	for _, item := range items {
+		envelopes = append(envelopes, storedDirectEnvelope{
+			TargetUsername:               item.GetTargetUsername(),
+			TargetDeviceID:               item.GetTargetDeviceId(),
+			Ciphertext:                   item.GetCiphertext(),
+			Nonce:                        item.GetNonce(),
+			RecipientSignedPrekeyID:      item.GetRecipientSignedPrekeyId(),
+			RecipientSignedPrekeyPublic:  item.GetRecipientSignedPrekeyPublic(),
+			RecipientOneTimePrekeyID:     item.GetRecipientOneTimePrekeyId(),
+			RecipientOneTimePrekeyPublic: item.GetRecipientOneTimePrekeyPublic(),
+		})
+	}
+	return json.Marshal(envelopes)
+}
+
+func decodeDirectEnvelopes(raw []byte) ([]storedDirectEnvelope, error) {
+	var envelopes []storedDirectEnvelope
+	if err := json.Unmarshal(raw, &envelopes); err != nil {
+		return nil, err
+	}
+	return envelopes, nil
+}
+
+func pickDirectEnvelope(items []store.DirectEnvelope, msg store.Message, username, deviceID string) (store.DirectEnvelope, bool) {
+	for _, item := range items {
+		if item.TargetUsername == username && item.TargetDeviceID == deviceID {
+			return item, true
+		}
+	}
+	if username == msg.From && msg.SenderDeviceID == deviceID {
+		for _, item := range items {
+			if item.TargetUsername == msg.To {
+				return item, true
+			}
+		}
+	}
+	return store.DirectEnvelope{}, false
+}
+
+func encodeAttachmentDirectEnvelopes(items []*messengerv1.AttachmentDirectEnvelope) ([]byte, error) {
+	envelopes := make([]storedAttachmentDirectEnvelope, 0, len(items))
+	for _, item := range items {
+		envelopes = append(envelopes, storedAttachmentDirectEnvelope{
+			TargetUsername:      item.GetTargetUsername(),
+			TargetDeviceID:      item.GetTargetDeviceId(),
+			EncryptedDescriptor: item.GetEncryptedDescriptor(),
+			DescriptorNonce:     item.GetDescriptorNonce(),
+			RecipientSignedPrekeyID:     item.GetRecipientSignedPrekeyId(),
+			RecipientSignedPrekeyPublic: item.GetRecipientSignedPrekeyPublic(),
+			RecipientOneTimePrekeyID:    item.GetRecipientOneTimePrekeyId(),
+			RecipientOneTimePrekeyPublic: item.GetRecipientOneTimePrekeyPublic(),
+		})
+	}
+	return json.Marshal(envelopes)
+}
+
+func decodeAttachmentDirectEnvelopes(raw []byte) ([]storedAttachmentDirectEnvelope, error) {
+	var envelopes []storedAttachmentDirectEnvelope
+	if err := json.Unmarshal(raw, &envelopes); err != nil {
+		return nil, err
+	}
+	return envelopes, nil
+}
+
+func pickAttachmentDirectEnvelope(items []store.AttachmentDirectEnvelope, msg store.Message, username, deviceID string) (store.AttachmentDirectEnvelope, bool) {
+	for _, item := range items {
+		if item.TargetUsername == username && item.TargetDeviceID == deviceID {
+			return item, true
+		}
+	}
+	if username == msg.From && msg.SenderDeviceID == deviceID {
+		for _, item := range items {
+			if item.TargetUsername == msg.To {
+				return item, true
+			}
+		}
+	}
+	return store.AttachmentDirectEnvelope{}, false
 }
 
 func attachmentToProto(item store.Attachment) *messengerv1.Attachment {
@@ -1180,10 +1677,109 @@ func attachmentKindToProto(kind store.AttachmentKind) messengerv1.AttachmentKind
 func identityKeyToProto(key store.IdentityKey) *messengerv1.IdentityKey {
 	return &messengerv1.IdentityKey{
 		Username:    key.Username,
+		DeviceId:    key.DeviceID,
 		KeyId:       key.KeyID,
 		Algorithm:   key.Algorithm,
 		PublicKey:   key.PublicKey,
 		PublishedAt: timestamppb.New(key.PublishedAt),
+	}
+}
+
+func archiveKeyBundleToProto(bundle store.ArchiveKeyBundle, includePrivate bool) *messengerv1.ArchiveKeyBundle {
+	out := &messengerv1.ArchiveKeyBundle{
+		Username:  bundle.Username,
+		PublicKey: bundle.PublicKey,
+		Version:   bundle.Version,
+		UpdatedAt: timestamppb.New(bundle.UpdatedAt),
+	}
+	if includePrivate {
+		out.EncryptedPrivateKey = bundle.EncryptedPrivateKey
+		out.KdfSalt = bundle.KDFSalt
+		out.KdfParams = bundle.KDFParams
+	}
+	return out
+}
+
+func archiveHeaderToProto(bundle store.ArchiveKeyBundle) *messengerv1.HistoryArchiveHeader {
+	return &messengerv1.HistoryArchiveHeader{
+		Username:            bundle.Username,
+		PublicKey:           bundle.PublicKey,
+		EncryptedPrivateKey: bundle.EncryptedPrivateKey,
+		KdfSalt:             bundle.KDFSalt,
+		KdfParams:           bundle.KDFParams,
+		Version:             bundle.Version,
+		UpdatedAt:           timestamppb.New(bundle.UpdatedAt),
+	}
+}
+
+func historyArchiveRecordFromProto(item *messengerv1.HistoryArchiveRecord) store.HistoryArchiveRecord {
+	record := store.HistoryArchiveRecord{
+		Sequence:           item.GetSequence(),
+		RecordID:           item.GetRecordId(),
+		OwnerUsername:      item.GetOwnerUsername(),
+		ConversationID:     item.GetConversationId(),
+		RecordType:         historyArchiveRecordTypeFromProto(item.GetRecordType()),
+		MessageID:          item.GetMessageId(),
+		AttachmentID:       item.GetAttachmentId(),
+		GroupKeyVersion:    item.GetGroupKeyVersion(),
+		Sender:             item.GetSender(),
+		Ciphertext:         item.GetCiphertext(),
+		Nonce:              item.GetNonce(),
+		EphemeralPublicKey: item.GetEphemeralPublicKey(),
+		ArchiveKeyVersion:  item.GetArchiveKeyVersion(),
+	}
+	if createdAt := item.GetCreatedAt(); createdAt != nil {
+		record.CreatedAt = createdAt.AsTime()
+	}
+	return record
+}
+
+func historyArchiveRecordToProto(item store.HistoryArchiveRecord) *messengerv1.HistoryArchiveRecord {
+	return &messengerv1.HistoryArchiveRecord{
+		Sequence:           item.Sequence,
+		RecordId:           item.RecordID,
+		OwnerUsername:      item.OwnerUsername,
+		ConversationId:     item.ConversationID,
+		RecordType:         historyArchiveRecordTypeToProto(item.RecordType),
+		MessageId:          item.MessageID,
+		AttachmentId:       item.AttachmentID,
+		GroupKeyVersion:    item.GroupKeyVersion,
+		Sender:             item.Sender,
+		CreatedAt:          timestamppb.New(item.CreatedAt),
+		Ciphertext:         item.Ciphertext,
+		Nonce:              item.Nonce,
+		EphemeralPublicKey: item.EphemeralPublicKey,
+		ArchiveKeyVersion:  item.ArchiveKeyVersion,
+	}
+}
+
+func historyArchiveRecordTypeFromProto(value messengerv1.HistoryArchiveRecordType) store.HistoryArchiveRecordType {
+	switch value {
+	case messengerv1.HistoryArchiveRecordType_HISTORY_ARCHIVE_RECORD_TYPE_GROUP_MESSAGE:
+		return store.HistoryArchiveRecordTypeGroupMessage
+	case messengerv1.HistoryArchiveRecordType_HISTORY_ARCHIVE_RECORD_TYPE_DIRECT_ATTACHMENT_DESCRIPTOR:
+		return store.HistoryArchiveRecordTypeDirectAttachmentDescriptor
+	case messengerv1.HistoryArchiveRecordType_HISTORY_ARCHIVE_RECORD_TYPE_GROUP_ATTACHMENT_DESCRIPTOR:
+		return store.HistoryArchiveRecordTypeGroupAttachmentDescriptor
+	case messengerv1.HistoryArchiveRecordType_HISTORY_ARCHIVE_RECORD_TYPE_GROUP_KEY_VERSION:
+		return store.HistoryArchiveRecordTypeGroupKeyVersion
+	default:
+		return store.HistoryArchiveRecordTypeDirectMessage
+	}
+}
+
+func historyArchiveRecordTypeToProto(value store.HistoryArchiveRecordType) messengerv1.HistoryArchiveRecordType {
+	switch value {
+	case store.HistoryArchiveRecordTypeGroupMessage:
+		return messengerv1.HistoryArchiveRecordType_HISTORY_ARCHIVE_RECORD_TYPE_GROUP_MESSAGE
+	case store.HistoryArchiveRecordTypeDirectAttachmentDescriptor:
+		return messengerv1.HistoryArchiveRecordType_HISTORY_ARCHIVE_RECORD_TYPE_DIRECT_ATTACHMENT_DESCRIPTOR
+	case store.HistoryArchiveRecordTypeGroupAttachmentDescriptor:
+		return messengerv1.HistoryArchiveRecordType_HISTORY_ARCHIVE_RECORD_TYPE_GROUP_ATTACHMENT_DESCRIPTOR
+	case store.HistoryArchiveRecordTypeGroupKeyVersion:
+		return messengerv1.HistoryArchiveRecordType_HISTORY_ARCHIVE_RECORD_TYPE_GROUP_KEY_VERSION
+	default:
+		return messengerv1.HistoryArchiveRecordType_HISTORY_ARCHIVE_RECORD_TYPE_DIRECT_MESSAGE
 	}
 }
 
@@ -1192,6 +1788,7 @@ func conversationKeyToProto(key store.ConversationKey) *messengerv1.Conversation
 	for _, envelope := range key.Envelopes {
 		envelopes = append(envelopes, &messengerv1.ConversationKeyEnvelope{
 			Username:       envelope.Username,
+			DeviceId:       envelope.DeviceID,
 			EncryptedKey:   envelope.EncryptedKey,
 			Nonce:          envelope.Nonce,
 			SenderKeyId:    envelope.SenderKeyID,
@@ -1210,9 +1807,10 @@ func conversationKeyToProto(key store.ConversationKey) *messengerv1.Conversation
 
 func prekeyBundleToProto(bundle store.PrekeyBundle) *messengerv1.PrekeyBundle {
 	return &messengerv1.PrekeyBundle{
-		Username: bundle.Username,
-		IdentityKey: identityKeyToProto(bundle.IdentityKey),
-		SignedPrekey: signedPrekeyToProto(bundle.SignedPrekey),
+		Username:      bundle.Username,
+		DeviceId:      bundle.DeviceID,
+		IdentityKey:   identityKeyToProto(bundle.IdentityKey),
+		SignedPrekey:  signedPrekeyToProto(bundle.SignedPrekey),
 		OneTimePrekey: oneTimePrekeyToProto(bundle.OneTimePrekey),
 	}
 }
@@ -1222,10 +1820,11 @@ func signedPrekeyToProto(key store.SignedPrekey) *messengerv1.SignedPrekey {
 		return nil
 	}
 	return &messengerv1.SignedPrekey{
-		Username: key.Username,
-		KeyId: key.KeyID,
-		Algorithm: key.Algorithm,
-		PublicKey: key.PublicKey,
+		Username:    key.Username,
+		DeviceId:    key.DeviceID,
+		KeyId:       key.KeyID,
+		Algorithm:   key.Algorithm,
+		PublicKey:   key.PublicKey,
 		PublishedAt: timestamppb.New(key.PublishedAt),
 	}
 }
@@ -1235,10 +1834,11 @@ func oneTimePrekeyToProto(key store.OneTimePrekey) *messengerv1.OneTimePrekey {
 		return nil
 	}
 	return &messengerv1.OneTimePrekey{
-		Username: key.Username,
-		KeyId: key.KeyID,
-		Algorithm: key.Algorithm,
-		PublicKey: key.PublicKey,
+		Username:    key.Username,
+		DeviceId:    key.DeviceID,
+		KeyId:       key.KeyID,
+		Algorithm:   key.Algorithm,
+		PublicKey:   key.PublicKey,
 		PublishedAt: timestamppb.New(key.PublishedAt),
 	}
 }
@@ -1247,10 +1847,11 @@ func groupKeyUpdateFromProto(req *messengerv1.GroupKeyUpdate, conversationID, cr
 	envelopes := make([]store.ConversationKeyEnvelope, 0, len(req.GetEnvelopes()))
 	for _, envelope := range req.GetEnvelopes() {
 		envelopes = append(envelopes, store.ConversationKeyEnvelope{
-			Username: envelope.GetUsername(),
-			EncryptedKey: envelope.GetEncryptedKey(),
-			Nonce: envelope.GetNonce(),
-			SenderKeyID: envelope.GetSenderKeyId(),
+			Username:       envelope.GetUsername(),
+			DeviceID:       envelope.GetDeviceId(),
+			EncryptedKey:   envelope.GetEncryptedKey(),
+			Nonce:          envelope.GetNonce(),
+			SenderKeyID:    envelope.GetSenderKeyId(),
 			RecipientKeyID: envelope.GetRecipientKeyId(),
 		})
 	}
@@ -1261,6 +1862,25 @@ func groupKeyUpdateFromProto(req *messengerv1.GroupKeyUpdate, conversationID, cr
 		CreatedBy: createdBy,
 		Envelopes: envelopes,
 	}
+}
+
+func (s *Server) archiveRecordsFromProto(items []*messengerv1.HistoryArchiveRecord, conversationID, sender string, allowedOwners []string) ([]store.HistoryArchiveRecord, error) {
+	allowed := make(map[string]struct{}, len(allowedOwners))
+	for _, owner := range allowedOwners {
+		allowed[owner] = struct{}{}
+	}
+	records := make([]store.HistoryArchiveRecord, 0, len(items))
+	for _, item := range items {
+		record := historyArchiveRecordFromProto(item)
+		if record.ConversationID != conversationID || record.Sender != sender {
+			return nil, status.Error(codes.InvalidArgument, "archive record metadata mismatch")
+		}
+		if _, ok := allowed[record.OwnerUsername]; !ok {
+			return nil, status.Error(codes.PermissionDenied, "archive record owner is not a conversation participant")
+		}
+		records = append(records, record)
+	}
+	return records, nil
 }
 
 func groupKeyUpdatePtrFromProto(req *messengerv1.GroupKeyUpdate, conversationID, createdBy string) *store.ConversationKey {
@@ -1452,23 +2072,23 @@ func newGroupConversationID() string {
 
 type eventHub struct {
 	mu          sync.RWMutex
-	subscribers map[string]map[chan *messengerv1.ServerEvent]struct{}
+	subscribers map[string]map[chan *messengerv1.ServerEvent]string
 }
 
 func newEventHub() *eventHub {
-	return &eventHub{
-		subscribers: make(map[string]map[chan *messengerv1.ServerEvent]struct{}),
+		return &eventHub{
+		subscribers: make(map[string]map[chan *messengerv1.ServerEvent]string),
 	}
 }
 
-func (h *eventHub) subscribe(username string) (<-chan *messengerv1.ServerEvent, func()) {
+func (h *eventHub) subscribe(username, deviceID string) (<-chan *messengerv1.ServerEvent, func()) {
 	ch := make(chan *messengerv1.ServerEvent, 32)
 
 	h.mu.Lock()
 	if _, ok := h.subscribers[username]; !ok {
-		h.subscribers[username] = make(map[chan *messengerv1.ServerEvent]struct{})
+		h.subscribers[username] = make(map[chan *messengerv1.ServerEvent]string)
 	}
-	h.subscribers[username][ch] = struct{}{}
+	h.subscribers[username][ch] = deviceID
 	presence := h.presenceLocked()
 	h.mu.Unlock()
 
@@ -1506,6 +2126,24 @@ func (h *eventHub) publishUsers(usernames []string, evt *messengerv1.ServerEvent
 		for ch := range h.subscribers[username] {
 			select {
 			case ch <- evt:
+			default:
+			}
+		}
+	}
+}
+
+func (h *eventHub) publishMessageUsers(usernames []string, msg store.Message, projector func(store.Message, string, string) (*messengerv1.Message, error)) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	for _, username := range usernames {
+		for ch, deviceID := range h.subscribers[username] {
+			projected, err := projector(msg, username, deviceID)
+			if err != nil {
+				continue
+			}
+			select {
+			case ch <- newMessageEvent(projected):
 			default:
 			}
 		}

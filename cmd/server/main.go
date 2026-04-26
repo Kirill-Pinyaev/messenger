@@ -22,11 +22,11 @@ import (
 func main() {
 	ctx := context.Background()
 
-	userStore, msgStore, convStore, keyStore, closePool := initStores(ctx)
+	userStore, msgStore, convStore, keyStore, archiveStore, closePool := initStores(ctx)
 	defer closePool()
 
 	authSvc := auth.NewService(userStore)
-	apiServer := grpcapi.NewServer(authSvc, userStore, msgStore, convStore, keyStore)
+	apiServer := grpcapi.NewServer(authSvc, userStore, msgStore, convStore, keyStore, archiveStore)
 
 	grpcAddr := envOrDefault("GRPC_ADDR", ":9090")
 	httpAddr := envOrDefault("HTTP_ADDR", ":8082")
@@ -36,49 +36,55 @@ func main() {
 	serveGRPC(grpcAddr, grpcServer)
 }
 
-func initStores(ctx context.Context) (store.UserStore, store.MessageStore, store.ConversationStore, store.KeyStore, func()) {
+func initStores(ctx context.Context) (store.UserStore, store.MessageStore, store.ConversationStore, store.KeyStore, store.ArchiveStore, func()) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		log.Println("DATABASE_URL is empty, using in-memory stores")
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), func() {}
+		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
 	}
 
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
 		log.Println("failed to connect to Postgres, using in-memory stores:", err)
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), func() {}
+		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
 	}
 
 	userStore, err := store.NewPostgresUserStore(ctx, pool)
 	if err != nil {
 		pool.Close()
 		log.Println("failed to init Postgres user store, using in-memory stores:", err)
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), func() {}
+		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
 	}
 
 	msgStore, err := store.NewPostgresMessageStore(ctx, pool)
 	if err != nil {
 		pool.Close()
 		log.Println("failed to init Postgres message store, using in-memory stores:", err)
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), func() {}
+		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
 	}
 
 	convStore, err := store.NewPostgresConversationStore(ctx, pool)
 	if err != nil {
 		pool.Close()
 		log.Println("failed to init Postgres conversation store, using in-memory stores:", err)
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), func() {}
+		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
 	}
 
 	keyStore, err := store.NewPostgresKeyStore(ctx, pool)
 	if err != nil {
 		pool.Close()
 		log.Println("failed to init Postgres key store, using in-memory stores:", err)
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), func() {}
+		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
+	}
+	archiveStore, err := store.NewPostgresArchiveStore(ctx, pool)
+	if err != nil {
+		pool.Close()
+		log.Println("failed to init Postgres archive store, using in-memory stores:", err)
+		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
 	}
 
 	log.Println("connected to Postgres")
-	return userStore, msgStore, convStore, keyStore, pool.Close
+	return userStore, msgStore, convStore, keyStore, archiveStore, pool.Close
 }
 
 func serveHTTP(addr string, grpcServer *grpc.Server) {

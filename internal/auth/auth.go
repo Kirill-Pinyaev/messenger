@@ -24,13 +24,18 @@ var (
 
 type Service struct {
 	mu     sync.RWMutex
-	tokens map[string]string
+	tokens map[string]Session
 	users  store.UserStore
+}
+
+type Session struct {
+	Username string
+	DeviceID string
 }
 
 func NewService(userStore store.UserStore) *Service {
 	return &Service{
-		tokens: make(map[string]string),
+		tokens: make(map[string]Session),
 		users:  userStore,
 	}
 }
@@ -67,9 +72,10 @@ func (s *Service) Register(username, password, firstName, lastName, avatarHex, a
 	return nil
 }
 
-func (s *Service) Login(username, password string) (string, error) {
+func (s *Service) Login(username, password, deviceID string) (string, error) {
 	username = strings.TrimSpace(username)
-	if username == "" || password == "" {
+	deviceID = strings.TrimSpace(deviceID)
+	if username == "" || password == "" || deviceID == "" {
 		return "", ErrBadInput
 	}
 
@@ -95,16 +101,16 @@ func (s *Service) Login(username, password string) (string, error) {
 	}
 
 	s.mu.Lock()
-	s.tokens[token] = username
+	s.tokens[token] = Session{Username: username, DeviceID: deviceID}
 	s.mu.Unlock()
 	return token, nil
 }
 
-func (s *Service) UsernameForToken(token string) (string, bool) {
+func (s *Service) SessionForToken(token string) (Session, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	username, ok := s.tokens[token]
-	return username, ok
+	session, ok := s.tokens[token]
+	return session, ok
 }
 
 func (s *Service) InvalidateToken(token string) {
@@ -125,8 +131,8 @@ func (s *Service) DeleteAccount(ctx context.Context, username string) error {
 	}
 
 	s.mu.Lock()
-	for t, u := range s.tokens {
-		if u == username {
+	for t, session := range s.tokens {
+		if session.Username == username {
 			delete(s.tokens, t)
 		}
 	}
