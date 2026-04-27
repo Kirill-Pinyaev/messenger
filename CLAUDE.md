@@ -11,6 +11,7 @@ _Последнее обновление: 2026-04-26 (archive bootstrap/server r
 - **Этап 6 завершён**: Android-клиент написан, собирается, работает flow `login → conversations → chat с E2EE`, включая E2EE-вложения и archive restore старой истории при открытии чата.
 - Web и Android теперь при password-login синхронизируют локальный archive identity с серверным `history_archive_header`; если header на сервере отсутствует, он допубликовывается из локального archive key.
 - Web при открытии читаемого чата теперь делает best-effort backfill старых расшифрованных сообщений и attachment descriptor-ов в archive текущего аккаунта, чтобы новые устройства того же пользователя могли восстановить эту историю.
+- Для открытия Web-клиента с телефона/другого устройства без ручной установки локальных сертификатов используется HTTPS-терминация у провайдера/внешнего reverse proxy, который проксирует домен на локальный `http://<LAN-IP>:8082`. Локальный `Caddy` для этого сценария больше не используется. Обычный `http://<LAN-IP>:8082` не подходит для E2EE Web-клиента, потому что `WebCrypto` в браузере по IP/HTTP недоступен.
 - при значимых изменениях `proto`, state-модели, key lifecycle и архитектуры нужно обновлять этот файл.
 
 ## Актуальная структура
@@ -414,10 +415,10 @@ type Message struct {
 
 ### Подключение к серверу
 
-- `GrpcManager.SERVER_HOST = "10.0.2.2"` — адрес хост-машины из эмулятора
+- `GrpcManager.SERVER_HOST = "192.168.1.116"` — текущий LAN IP сервера для Android/gRPC
 - `SERVER_PORT = 9090` — plaintext gRPC (usePlaintext)
-- Для физического устройства нужно изменить HOST на IP хост-машины в локальной сети
-- `network_security_config.xml` разрешает cleartext для `10.0.2.2` и `localhost`
+- Для физического устройства и для текущего эмулятора используется прямой доступ к LAN IP сервера
+- `network_security_config.xml` разрешает cleartext для `10.0.2.2`, `localhost` и локального IP-диапазона
 
 ### AuthViewModel flow
 
