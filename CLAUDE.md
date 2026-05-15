@@ -45,6 +45,7 @@ messenger/                          ← Go-бэкенд + Web (этот репо
 │       ├── media-e2ee.js        — AES-GCM для media blobs + descriptor format
 │       ├── group-editor.js
 │       └── group-permissions.js
+├── messenger/                   — андроид реализация подробнее ниже
 └── CLAUDE.md
 
 ~/AndroidStudioProjects/messenger/ ← Android-клиент (отдельный путь)
