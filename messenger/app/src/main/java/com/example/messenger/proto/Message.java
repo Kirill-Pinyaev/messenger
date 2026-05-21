@@ -27,6 +27,8 @@ public  final class Message extends
     recipientOneTimePrekeyPublic_ = com.google.protobuf.ByteString.EMPTY;
     attachments_ = emptyProtobufList();
     senderDeviceId_ = "";
+    e2EeAlgorithm_ = "";
+    ratchetPublicKey_ = com.google.protobuf.ByteString.EMPTY;
   }
   private int bitField0_;
   public static final int MESSAGE_ID_FIELD_NUMBER = 1;
@@ -741,6 +743,133 @@ public  final class Message extends
     checkByteStringIsUtf8(value);
     senderDeviceId_ = value.toStringUtf8();
 
+  }
+
+  public static final int E2EE_ALGORITHM_FIELD_NUMBER = 18;
+  private java.lang.String e2EeAlgorithm_;
+  /**
+   * <code>string e2ee_algorithm = 18;</code>
+   * @return The e2eeAlgorithm.
+   */
+  @java.lang.Override
+  public java.lang.String getE2EeAlgorithm() {
+    return e2EeAlgorithm_;
+  }
+  /**
+   * <code>string e2ee_algorithm = 18;</code>
+   * @return The bytes for e2eeAlgorithm.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getE2EeAlgorithmBytes() {
+    return com.google.protobuf.ByteString.copyFromUtf8(e2EeAlgorithm_);
+  }
+  /**
+   * <code>string e2ee_algorithm = 18;</code>
+   * @param value The e2eeAlgorithm to set.
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setE2EeAlgorithm(
+      java.lang.String value) {
+    value.getClass();  // minimal bytecode null check
+
+    e2EeAlgorithm_ = value;
+  }
+  /**
+   * <code>string e2ee_algorithm = 18;</code>
+   */
+  private void clearE2EeAlgorithm() {
+
+    e2EeAlgorithm_ = getDefaultInstance().getE2EeAlgorithm();
+  }
+  /**
+   * <code>string e2ee_algorithm = 18;</code>
+   * @param value The bytes for e2eeAlgorithm to set.
+   */
+  private void setE2EeAlgorithmBytes(
+      com.google.protobuf.ByteString value) {
+    checkByteStringIsUtf8(value);
+    e2EeAlgorithm_ = value.toStringUtf8();
+
+  }
+
+  public static final int RATCHET_PUBLIC_KEY_FIELD_NUMBER = 19;
+  private com.google.protobuf.ByteString ratchetPublicKey_;
+  /**
+   * <code>bytes ratchet_public_key = 19;</code>
+   * @return The ratchetPublicKey.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString getRatchetPublicKey() {
+    return ratchetPublicKey_;
+  }
+  /**
+   * <code>bytes ratchet_public_key = 19;</code>
+   * @param value The ratchetPublicKey to set.
+   */
+  private void setRatchetPublicKey(com.google.protobuf.ByteString value) {
+    java.lang.Class<?> valueClass = value.getClass();
+  
+    ratchetPublicKey_ = value;
+  }
+  /**
+   * <code>bytes ratchet_public_key = 19;</code>
+   */
+  private void clearRatchetPublicKey() {
+
+    ratchetPublicKey_ = getDefaultInstance().getRatchetPublicKey();
+  }
+
+  public static final int PREVIOUS_CHAIN_LENGTH_FIELD_NUMBER = 20;
+  private int previousChainLength_;
+  /**
+   * <code>int32 previous_chain_length = 20;</code>
+   * @return The previousChainLength.
+   */
+  @java.lang.Override
+  public int getPreviousChainLength() {
+    return previousChainLength_;
+  }
+  /**
+   * <code>int32 previous_chain_length = 20;</code>
+   * @param value The previousChainLength to set.
+   */
+  private void setPreviousChainLength(int value) {
+    
+    previousChainLength_ = value;
+  }
+  /**
+   * <code>int32 previous_chain_length = 20;</code>
+   */
+  private void clearPreviousChainLength() {
+
+    previousChainLength_ = 0;
+  }
+
+  public static final int MESSAGE_NUMBER_FIELD_NUMBER = 21;
+  private int messageNumber_;
+  /**
+   * <code>int32 message_number = 21;</code>
+   * @return The messageNumber.
+   */
+  @java.lang.Override
+  public int getMessageNumber() {
+    return messageNumber_;
+  }
+  /**
+   * <code>int32 message_number = 21;</code>
+   * @param value The messageNumber to set.
+   */
+  private void setMessageNumber(int value) {
+    
+    messageNumber_ = value;
+  }
+  /**
+   * <code>int32 message_number = 21;</code>
+   */
+  private void clearMessageNumber() {
+
+    messageNumber_ = 0;
   }
 
   public static com.example.messenger.proto.Message parseFrom(
@@ -1577,6 +1706,139 @@ public  final class Message extends
       return this;
     }
 
+    /**
+     * <code>string e2ee_algorithm = 18;</code>
+     * @return The e2eeAlgorithm.
+     */
+    @java.lang.Override
+    public java.lang.String getE2EeAlgorithm() {
+      return instance.getE2EeAlgorithm();
+    }
+    /**
+     * <code>string e2ee_algorithm = 18;</code>
+     * @return The bytes for e2eeAlgorithm.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getE2EeAlgorithmBytes() {
+      return instance.getE2EeAlgorithmBytes();
+    }
+    /**
+     * <code>string e2ee_algorithm = 18;</code>
+     * @param value The e2eeAlgorithm to set.
+     * @return This builder for chaining.
+     */
+    public Builder setE2EeAlgorithm(
+        java.lang.String value) {
+      copyOnWrite();
+      instance.setE2EeAlgorithm(value);
+      return this;
+    }
+    /**
+     * <code>string e2ee_algorithm = 18;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearE2EeAlgorithm() {
+      copyOnWrite();
+      instance.clearE2EeAlgorithm();
+      return this;
+    }
+    /**
+     * <code>string e2ee_algorithm = 18;</code>
+     * @param value The bytes for e2eeAlgorithm to set.
+     * @return This builder for chaining.
+     */
+    public Builder setE2EeAlgorithmBytes(
+        com.google.protobuf.ByteString value) {
+      copyOnWrite();
+      instance.setE2EeAlgorithmBytes(value);
+      return this;
+    }
+
+    /**
+     * <code>bytes ratchet_public_key = 19;</code>
+     * @return The ratchetPublicKey.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString getRatchetPublicKey() {
+      return instance.getRatchetPublicKey();
+    }
+    /**
+     * <code>bytes ratchet_public_key = 19;</code>
+     * @param value The ratchetPublicKey to set.
+     * @return This builder for chaining.
+     */
+    public Builder setRatchetPublicKey(com.google.protobuf.ByteString value) {
+      copyOnWrite();
+      instance.setRatchetPublicKey(value);
+      return this;
+    }
+    /**
+     * <code>bytes ratchet_public_key = 19;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearRatchetPublicKey() {
+      copyOnWrite();
+      instance.clearRatchetPublicKey();
+      return this;
+    }
+
+    /**
+     * <code>int32 previous_chain_length = 20;</code>
+     * @return The previousChainLength.
+     */
+    @java.lang.Override
+    public int getPreviousChainLength() {
+      return instance.getPreviousChainLength();
+    }
+    /**
+     * <code>int32 previous_chain_length = 20;</code>
+     * @param value The previousChainLength to set.
+     * @return This builder for chaining.
+     */
+    public Builder setPreviousChainLength(int value) {
+      copyOnWrite();
+      instance.setPreviousChainLength(value);
+      return this;
+    }
+    /**
+     * <code>int32 previous_chain_length = 20;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearPreviousChainLength() {
+      copyOnWrite();
+      instance.clearPreviousChainLength();
+      return this;
+    }
+
+    /**
+     * <code>int32 message_number = 21;</code>
+     * @return The messageNumber.
+     */
+    @java.lang.Override
+    public int getMessageNumber() {
+      return instance.getMessageNumber();
+    }
+    /**
+     * <code>int32 message_number = 21;</code>
+     * @param value The messageNumber to set.
+     * @return This builder for chaining.
+     */
+    public Builder setMessageNumber(int value) {
+      copyOnWrite();
+      instance.setMessageNumber(value);
+      return this;
+    }
+    /**
+     * <code>int32 message_number = 21;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearMessageNumber() {
+      copyOnWrite();
+      instance.clearMessageNumber();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:messenger.v1.Message)
   }
   @java.lang.Override
@@ -1612,11 +1874,16 @@ public  final class Message extends
             "attachments_",
             com.example.messenger.proto.Attachment.class,
             "senderDeviceId_",
+            "e2EeAlgorithm_",
+            "ratchetPublicKey_",
+            "previousChainLength_",
+            "messageNumber_",
           };
           java.lang.String info =
-              "\u0000\u0011\u0000\u0001\u0001\u0011\u0011\u0000\u0001\u0000\u0001\u0002\u0002\u0208" +
+              "\u0000\u0015\u0000\u0001\u0001\u0015\u0015\u0000\u0001\u0000\u0001\u0002\u0002\u0208" +
               "\u0003\u0208\u0004\u0208\u0005\u0208\u0006\u1009\u0000\u0007\n\b\n\t\u0208\n\u0004" +
-              "\u000b\u0007\f\u0208\r\n\u000e\u0208\u000f\n\u0010\u001b\u0011\u0208";
+              "\u000b\u0007\f\u0208\r\n\u000e\u0208\u000f\n\u0010\u001b\u0011\u0208\u0012\u0208" +
+              "\u0013\n\u0014\u0004\u0015\u0004";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       // fall through

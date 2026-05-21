@@ -90,11 +90,13 @@ func TestMemoryKeyStorePrekeyBundleAcquisitionConsumesOneTimeKeys(t *testing.T) 
 	}
 
 	if _, err := store.UpsertSignedPrekey(ctx, SignedPrekey{
-		Username:  "bob",
-		DeviceID:  "phone",
-		KeyID:     "bob-signed-1",
-		Algorithm: "P256-HKDF-AESGCM",
-		PublicKey: []byte{4, 5, 6},
+		Username:           "bob",
+		DeviceID:           "phone",
+		KeyID:              "bob-signed-1",
+		Algorithm:          "X25519",
+		PublicKey:          []byte{4, 5, 6},
+		Signature:          []byte{9, 9, 9},
+		SignatureAlgorithm: "Ed25519",
 	}); err != nil {
 		t.Fatalf("UpsertSignedPrekey() error = %v", err)
 	}
@@ -112,6 +114,9 @@ func TestMemoryKeyStorePrekeyBundleAcquisitionConsumesOneTimeKeys(t *testing.T) 
 	}
 	if first.IdentityKey.KeyID != "bob-identity-1" || first.SignedPrekey.KeyID != "bob-signed-1" || first.OneTimePrekey.KeyID != "bob-otp-1" {
 		t.Fatalf("AcquirePrekeyBundle(first) = %+v", first)
+	}
+	if string(first.SignedPrekey.Signature) != string([]byte{9, 9, 9}) || first.SignedPrekey.SignatureAlgorithm != "Ed25519" {
+		t.Fatalf("signed prekey signature was not persisted: %+v", first.SignedPrekey)
 	}
 
 	second, err := store.AcquirePrekeyBundle(ctx, "bob", "phone")

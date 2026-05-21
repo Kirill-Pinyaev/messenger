@@ -24,12 +24,14 @@ type IdentityKey struct {
 }
 
 type SignedPrekey struct {
-	Username    string
-	DeviceID    string
-	KeyID       string
-	Algorithm   string
-	PublicKey   []byte
-	PublishedAt time.Time
+	Username           string
+	DeviceID           string
+	KeyID              string
+	Algorithm          string
+	PublicKey          []byte
+	Signature          []byte
+	SignatureAlgorithm string
+	PublishedAt        time.Time
 }
 
 type OneTimePrekey struct {
@@ -167,6 +169,7 @@ func (s *MemoryKeyStore) UpsertSignedPrekey(_ context.Context, key SignedPrekey)
 		key.PublishedAt = time.Now().UTC()
 	}
 	key.PublicKey = append([]byte(nil), key.PublicKey...)
+	key.Signature = append([]byte(nil), key.Signature...)
 	s.signedPrekeys[keySlot(key.Username, key.DeviceID)] = key
 	return cloneSignedPrekey(key), nil
 }
@@ -386,7 +389,11 @@ func validateSignedPrekey(key SignedPrekey) error {
 	key.DeviceID = strings.TrimSpace(key.DeviceID)
 	key.KeyID = strings.TrimSpace(key.KeyID)
 	key.Algorithm = strings.TrimSpace(key.Algorithm)
+	key.SignatureAlgorithm = strings.TrimSpace(key.SignatureAlgorithm)
 	if key.Username == "" || key.DeviceID == "" || key.KeyID == "" || key.Algorithm == "" || len(key.PublicKey) == 0 {
+		return ErrBadInput
+	}
+	if key.Algorithm == "X25519" && (key.SignatureAlgorithm == "" || len(key.Signature) == 0) {
 		return ErrBadInput
 	}
 	return nil
@@ -427,6 +434,7 @@ func cloneIdentityKey(key IdentityKey) IdentityKey {
 
 func cloneSignedPrekey(key SignedPrekey) SignedPrekey {
 	key.PublicKey = append([]byte(nil), key.PublicKey...)
+	key.Signature = append([]byte(nil), key.Signature...)
 	return key
 }
 

@@ -192,6 +192,8 @@ export const SignedPrekey = /*@__PURE__*/ proto3.makeMessageType(
     { no: 4, name: "public_key", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
     { no: 5, name: "published_at", kind: "message", T: Timestamp },
     { no: 6, name: "device_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 7, name: "signature", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 8, name: "signature_algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
   ],
 );
 
@@ -366,6 +368,8 @@ export const PublishPrekeyBundleRequest = /*@__PURE__*/ proto3.makeMessageType(
     { no: 2, name: "signed_prekey_algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 3, name: "signed_prekey_public_key", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
     { no: 4, name: "one_time_prekeys", kind: "message", T: OneTimePrekeyUpload, repeated: true },
+    { no: 5, name: "signed_prekey_signature", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 6, name: "signed_prekey_signature_algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
   ],
 );
 
@@ -555,6 +559,10 @@ export const DirectMessageEnvelope = /*@__PURE__*/ proto3.makeMessageType(
     { no: 6, name: "recipient_signed_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
     { no: 7, name: "recipient_one_time_prekey_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 8, name: "recipient_one_time_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 9, name: "e2ee_algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 10, name: "ratchet_public_key", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 11, name: "previous_chain_length", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+    { no: 12, name: "message_number", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
   ],
 );
 
@@ -572,6 +580,10 @@ export const AttachmentDirectEnvelope = /*@__PURE__*/ proto3.makeMessageType(
     { no: 6, name: "recipient_signed_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
     { no: 7, name: "recipient_one_time_prekey_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 8, name: "recipient_one_time_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 9, name: "e2ee_algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 10, name: "ratchet_public_key", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 11, name: "previous_chain_length", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+    { no: 12, name: "message_number", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
   ],
 );
 
@@ -651,6 +663,10 @@ export const Message = /*@__PURE__*/ proto3.makeMessageType(
     { no: 15, name: "recipient_one_time_prekey_public", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
     { no: 16, name: "attachments", kind: "message", T: Attachment, repeated: true },
     { no: 17, name: "sender_device_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 18, name: "e2ee_algorithm", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 19, name: "ratchet_public_key", kind: "scalar", T: 12 /* ScalarType.BYTES */ },
+    { no: 20, name: "previous_chain_length", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+    { no: 21, name: "message_number", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
   ],
 );
 

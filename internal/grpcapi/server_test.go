@@ -753,15 +753,15 @@ func TestServerEncryptedMessageAndKeyFlow(t *testing.T) {
 	}
 
 	sent, err := messageClient.SendMessage(aliceCtx, &messengerv1.SendMessageRequest{
-		To:                       "bob",
-		Ciphertext:               []byte{10, 11, 12},
-		Nonce:                    []byte{1, 1, 1, 1},
-		SenderKeyId:              "alice-key-1",
-		ConversationKeyVersion: 1,
-		Encrypted:                true,
-		RecipientSignedPrekeyId:  acquiredFirst.GetSignedPrekey().GetKeyId(),
-		RecipientSignedPrekeyPublic: acquiredFirst.GetSignedPrekey().GetPublicKey(),
-		RecipientOneTimePrekeyId: acquiredFirst.GetOneTimePrekey().GetKeyId(),
+		To:                           "bob",
+		Ciphertext:                   []byte{10, 11, 12},
+		Nonce:                        []byte{1, 1, 1, 1},
+		SenderKeyId:                  "alice-key-1",
+		ConversationKeyVersion:       1,
+		Encrypted:                    true,
+		RecipientSignedPrekeyId:      acquiredFirst.GetSignedPrekey().GetKeyId(),
+		RecipientSignedPrekeyPublic:  acquiredFirst.GetSignedPrekey().GetPublicKey(),
+		RecipientOneTimePrekeyId:     acquiredFirst.GetOneTimePrekey().GetKeyId(),
 		RecipientOneTimePrekeyPublic: acquiredFirst.GetOneTimePrekey().GetPublicKey(),
 	})
 	if err != nil {
@@ -982,6 +982,8 @@ func TestServerDirectMessagesProjectPerDevice(t *testing.T) {
 				RecipientSignedPrekeyPublic:  []byte{11, 12, 13},
 				RecipientOneTimePrekeyId:     "bob-web-otp-1",
 				RecipientOneTimePrekeyPublic: []byte{21, 22, 23},
+				E2EeAlgorithm:                "DR-X25519-HKDF-SHA256-AESGCM-Ed25519-v1",
+				RatchetPublicKey:             []byte{8, 8, 0},
 			},
 			{
 				TargetUsername:               "bob",
@@ -992,6 +994,8 @@ func TestServerDirectMessagesProjectPerDevice(t *testing.T) {
 				RecipientSignedPrekeyPublic:  []byte{31, 32, 33},
 				RecipientOneTimePrekeyId:     "bob-phone-otp-1",
 				RecipientOneTimePrekeyPublic: []byte{41, 42, 43},
+				E2EeAlgorithm:                "DR-X25519-HKDF-SHA256-AESGCM-Ed25519-v1",
+				RatchetPublicKey:             []byte{8, 8, 1},
 			},
 		},
 	}); err != nil {
@@ -1128,6 +1132,8 @@ func TestServerGetMessagesReturnsPlaceholderForDirectHistoryUnavailableOnNewDevi
 				RecipientSignedPrekeyPublic:  []byte{11, 12, 13},
 				RecipientOneTimePrekeyId:     "alice-web-otp-1",
 				RecipientOneTimePrekeyPublic: []byte{21, 22, 23},
+				E2EeAlgorithm:                "DR-X25519-HKDF-SHA256-AESGCM-Ed25519-v1",
+				RatchetPublicKey:             []byte{8, 8, 2},
 			},
 		},
 	}); err != nil {
@@ -1223,14 +1229,14 @@ func TestServerDirectAttachmentOnlyMessageProjectsDescriptorPerDevice(t *testing
 		t.Fatalf("PrepareMediaUpload(image) error = %v", err)
 	}
 	if _, err := messageClient.UploadMedia(aliceCtx, &messengerv1.UploadMediaRequest{
-		MediaId:   prepared.GetMediaId(),
+		MediaId:    prepared.GetMediaId(),
 		Ciphertext: []byte{1, 2, 3},
-		Nonce:     []byte{4, 5, 6},
-		Sha256:    []byte{7, 8, 9},
-		SizeBytes: 3,
-		MimeType:  "image/png",
-		Filename:  "image.png",
-		Kind:      messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE,
+		Nonce:      []byte{4, 5, 6},
+		Sha256:     []byte{7, 8, 9},
+		SizeBytes:  3,
+		MimeType:   "image/png",
+		Filename:   "image.png",
+		Kind:       messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE,
 	}); err != nil {
 		t.Fatalf("UploadMedia(image) error = %v", err)
 	}
@@ -1241,23 +1247,23 @@ func TestServerDirectAttachmentOnlyMessageProjectsDescriptorPerDevice(t *testing
 		SenderKeyId: "alice-key-1",
 		Attachments: []*messengerv1.Attachment{
 			{
-				AttachmentId: "att-1",
-				Kind:         messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE,
-				Filename:     "image.png",
-				MimeType:     "image/png",
-				SizeBytes:    3,
-				MediaId:      prepared.GetMediaId(),
-				Sha256:       []byte{7, 8, 9},
+				AttachmentId:   "att-1",
+				Kind:           messengerv1.AttachmentKind_ATTACHMENT_KIND_IMAGE,
+				Filename:       "image.png",
+				MimeType:       "image/png",
+				SizeBytes:      3,
+				MediaId:        prepared.GetMediaId(),
+				Sha256:         []byte{7, 8, 9},
 				CiphertextSize: 3,
 				DirectEnvelopes: []*messengerv1.AttachmentDirectEnvelope{
 					{
-						TargetUsername:      "bob",
-						TargetDeviceId:      "bob-web",
-						EncryptedDescriptor: []byte{9, 9, 9},
-						DescriptorNonce:     []byte{8, 8, 8},
-						RecipientSignedPrekeyId:     "bob-web-spk-1",
-						RecipientSignedPrekeyPublic: []byte{11, 12, 13},
-						RecipientOneTimePrekeyId:    "bob-web-otp-1",
+						TargetUsername:               "bob",
+						TargetDeviceId:               "bob-web",
+						EncryptedDescriptor:          []byte{9, 9, 9},
+						DescriptorNonce:              []byte{8, 8, 8},
+						RecipientSignedPrekeyId:      "bob-web-spk-1",
+						RecipientSignedPrekeyPublic:  []byte{11, 12, 13},
+						RecipientOneTimePrekeyId:     "bob-web-otp-1",
 						RecipientOneTimePrekeyPublic: []byte{21, 22, 23},
 					},
 				},

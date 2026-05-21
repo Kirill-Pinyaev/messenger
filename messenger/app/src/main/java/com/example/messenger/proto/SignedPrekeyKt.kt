@@ -139,6 +139,40 @@ public object SignedPrekeyKt {
     public fun clearDeviceId() {
       _builder.clearDeviceId()
     }
+
+    /**
+     * <code>bytes signature = 7;</code>
+     */
+    public var signature: com.google.protobuf.ByteString
+      @kotlin.jvm.JvmName("getSignature")
+        get() = _builder.signature
+      @kotlin.jvm.JvmName("setSignature")
+        set(value) {
+        _builder.signature = value
+      }
+    /**
+     * `bytes signature = 7;`
+     */
+    public fun clearSignature() {
+      _builder.clearSignature()
+    }
+
+    /**
+     * `string signature_algorithm = 8;`
+     */
+    public var signatureAlgorithm: kotlin.String
+      @kotlin.jvm.JvmName("getSignatureAlgorithm")
+        get() = _builder.signatureAlgorithm
+      @kotlin.jvm.JvmName("setSignatureAlgorithm")
+        set(value) {
+        _builder.signatureAlgorithm = value
+      }
+    /**
+     * `string signature_algorithm = 8;`
+     */
+    public fun clearSignatureAlgorithm() {
+      _builder.clearSignatureAlgorithm()
+    }
   }
 }
 public inline fun com.example.messenger.proto.SignedPrekey.copy(block: `com.example.messenger.proto`.SignedPrekeyKt.Dsl.() -> kotlin.Unit): com.example.messenger.proto.SignedPrekey =

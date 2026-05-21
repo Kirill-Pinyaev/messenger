@@ -163,6 +163,74 @@ public object DirectMessageEnvelopeKt {
     public fun clearRecipientOneTimePrekeyPublic() {
       _builder.clearRecipientOneTimePrekeyPublic()
     }
+
+    /**
+     * `string e2ee_algorithm = 9;`
+     */
+    public var e2EeAlgorithm: kotlin.String
+      @kotlin.jvm.JvmName("getE2EeAlgorithm")
+        get() = _builder.e2EeAlgorithm
+      @kotlin.jvm.JvmName("setE2EeAlgorithm")
+        set(value) {
+        _builder.e2EeAlgorithm = value
+      }
+    /**
+     * `string e2ee_algorithm = 9;`
+     */
+    public fun clearE2EeAlgorithm() {
+      _builder.clearE2EeAlgorithm()
+    }
+
+    /**
+     * <code>bytes ratchet_public_key = 10;</code>
+     */
+    public var ratchetPublicKey: com.google.protobuf.ByteString
+      @kotlin.jvm.JvmName("getRatchetPublicKey")
+        get() = _builder.ratchetPublicKey
+      @kotlin.jvm.JvmName("setRatchetPublicKey")
+        set(value) {
+        _builder.ratchetPublicKey = value
+      }
+    /**
+     * `bytes ratchet_public_key = 10;`
+     */
+    public fun clearRatchetPublicKey() {
+      _builder.clearRatchetPublicKey()
+    }
+
+    /**
+     * <code>int32 previous_chain_length = 11;</code>
+     */
+    public var previousChainLength: kotlin.Int
+      @kotlin.jvm.JvmName("getPreviousChainLength")
+        get() = _builder.previousChainLength
+      @kotlin.jvm.JvmName("setPreviousChainLength")
+        set(value) {
+        _builder.previousChainLength = value
+      }
+    /**
+     * `int32 previous_chain_length = 11;`
+     */
+    public fun clearPreviousChainLength() {
+      _builder.clearPreviousChainLength()
+    }
+
+    /**
+     * <code>int32 message_number = 12;</code>
+     */
+    public var messageNumber: kotlin.Int
+      @kotlin.jvm.JvmName("getMessageNumber")
+        get() = _builder.messageNumber
+      @kotlin.jvm.JvmName("setMessageNumber")
+        set(value) {
+        _builder.messageNumber = value
+      }
+    /**
+     * `int32 message_number = 12;`
+     */
+    public fun clearMessageNumber() {
+      _builder.clearMessageNumber()
+    }
   }
 }
 public inline fun com.example.messenger.proto.DirectMessageEnvelope.copy(block: `com.example.messenger.proto`.DirectMessageEnvelopeKt.Dsl.() -> kotlin.Unit): com.example.messenger.proto.DirectMessageEnvelope =

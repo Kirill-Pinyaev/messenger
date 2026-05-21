@@ -1,3 +1,12 @@
+import { x25519 } from "@noble/curves/ed25519.js";
+import {
+  createRatchetIdentity,
+  decryptRatchetMessage,
+  encryptRatchetMessage,
+  exportRatchetIdentity,
+  importRatchetIdentity,
+} from "./double-ratchet.js";
+
 const subtle = globalThis.crypto?.subtle;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -71,6 +80,23 @@ async function generateKeyMaterial() {
   };
 }
 
+async function deriveX25519AesKey(privateKeyBytes, peerPublicKeyBytes, info) {
+  const shared = x25519.getSharedSecret(privateKeyBytes, peerPublicKeyBytes);
+  const hkdfKey = await subtle.importKey("raw", shared, "HKDF", false, ["deriveKey"]);
+  return subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: new Uint8Array(32),
+      info,
+    },
+    hkdfKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
 async function importPrivateKey(privateKeyJwk) {
   return subtle.importKey(
     "jwk",
@@ -138,27 +164,13 @@ async function makePrekey(username, prefix) {
   };
 }
 
-export async function createIdentity(username) {
+export async function createIdentity(username, deviceId = "") {
   assertCrypto();
-  const material = await generateKeyMaterial();
-  const signedPrekey = await makePrekey(username, "signed");
-  const oneTimePrekeys = await createOneTimePrekeys(username, 5);
-  return {
-    username,
-    keyId: randomKeyId(username, "identity"),
-    algorithm: "P256-HKDF-AESGCM",
-    ...material,
-    signedPrekey,
-    oneTimePrekeys,
-  };
+  return createRatchetIdentity(username, deviceId);
 }
 
 export async function createOneTimePrekeys(username, count) {
-  const items = [];
-  for (let i = 0; i < count; i++) {
-    items.push(await makePrekey(username, "otp"));
-  }
-  return items;
+  return [];
 }
 
 export async function topUpOneTimePrekeys(identity, minimumUnpublished = 5) {
@@ -174,29 +186,7 @@ export async function topUpOneTimePrekeys(identity, minimumUnpublished = 5) {
 }
 
 export async function exportIdentityState(identity) {
-  return {
-    username: identity.username,
-    keyId: identity.keyId,
-    algorithm: identity.algorithm,
-    publicKey: bytesToBase64(identity.publicKeyBytes),
-    privateKeyJwk: identity.privateKeyJwk,
-    signedPrekey: identity.signedPrekey ? {
-      username: identity.signedPrekey.username,
-      keyId: identity.signedPrekey.keyId,
-      algorithm: identity.signedPrekey.algorithm,
-      publicKey: bytesToBase64(identity.signedPrekey.publicKeyBytes),
-      privateKeyJwk: identity.signedPrekey.privateKeyJwk,
-      published: identity.signedPrekey.published === true,
-    } : null,
-    oneTimePrekeys: (identity.oneTimePrekeys || []).map((item) => ({
-      username: item.username,
-      keyId: item.keyId,
-      algorithm: item.algorithm,
-      publicKey: bytesToBase64(item.publicKeyBytes),
-      privateKeyJwk: item.privateKeyJwk,
-      published: item.published === true,
-    })),
-  };
+  return exportRatchetIdentity(identity);
 }
 
 async function importStoredPrekey(state, prefix, username) {
@@ -219,6 +209,9 @@ async function importStoredPrekey(state, prefix, username) {
 
 export async function importIdentityState(state) {
   assertCrypto();
+  if (state?.algorithm === "Ed25519" || state?.privateKey) {
+    return importRatchetIdentity(state);
+  }
   const publicKeyBytes = base64ToBytes(state.publicKey);
   const identity = {
     username: state.username,
@@ -245,6 +238,8 @@ export function buildPublishPrekeyBundle(identity) {
     signedPrekeyId: identity.signedPrekey.keyId,
     signedPrekeyAlgorithm: identity.signedPrekey.algorithm,
     signedPrekeyPublicKey: identity.signedPrekey.publicKeyBytes,
+    signedPrekeySignature: identity.signedPrekey.signature,
+    signedPrekeySignatureAlgorithm: identity.signedPrekey.signatureAlgorithm || "Ed25519",
     oneTimePrekeys: (identity.oneTimePrekeys || [])
       .filter((item) => !item.published)
       .map((item) => ({
@@ -264,30 +259,7 @@ export function markPrekeysAsPublished(identity) {
 }
 
 export async function encryptDirectMessage(plaintext, senderIdentity, recipientBundle) {
-  assertCrypto();
-  const aesKey = await deriveCombinedAesKey(
-    [senderIdentity.privateKey, senderIdentity.privateKey],
-    [
-      recipientBundle.signedPrekey?.publicKey || recipientBundle.signedPrekey?.publicKeyBytes,
-      recipientBundle.oneTimePrekey?.publicKey || recipientBundle.oneTimePrekey?.publicKeyBytes,
-    ],
-    DIRECT_INFO,
-  );
-  const nonce = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = new Uint8Array(await subtle.encrypt(
-    { name: "AES-GCM", iv: nonce },
-    aesKey,
-    encoder.encode(plaintext),
-  ));
-  return {
-    ciphertext,
-    nonce,
-    senderKeyId: senderIdentity.keyId,
-    recipientSignedPrekeyId: recipientBundle.signedPrekey.keyId,
-    recipientSignedPrekeyPublic: recipientBundle.signedPrekey.publicKey || recipientBundle.signedPrekey.publicKeyBytes,
-    recipientOneTimePrekeyId: recipientBundle.oneTimePrekey?.keyId || "",
-    recipientOneTimePrekeyPublic: recipientBundle.oneTimePrekey?.publicKey || recipientBundle.oneTimePrekey?.publicKeyBytes || new Uint8Array(),
-  };
+  return encryptRatchetMessage(plaintext, senderIdentity, recipientBundle);
 }
 
 function findLocalOneTimePrekey(identity, keyId) {
@@ -295,36 +267,11 @@ function findLocalOneTimePrekey(identity, keyId) {
 }
 
 export async function decryptDirectMessageForRecipient(payload, recipientIdentity, senderIdentityPublicKeyBytes) {
-  assertCrypto();
-  const oneTimePrekey = payload.recipientOneTimePrekeyId
-    ? findLocalOneTimePrekey(recipientIdentity, payload.recipientOneTimePrekeyId)
-    : null;
-  const aesKey = await deriveCombinedAesKey(
-    [recipientIdentity.signedPrekey?.privateKey, oneTimePrekey?.privateKey || null],
-    [senderIdentityPublicKeyBytes, senderIdentityPublicKeyBytes],
-    DIRECT_INFO,
-  );
-  const plaintext = await subtle.decrypt(
-    { name: "AES-GCM", iv: payload.nonce },
-    aesKey,
-    payload.ciphertext,
-  );
-  return decoder.decode(plaintext);
+  return decryptRatchetMessage(payload, recipientIdentity, { publicKey: senderIdentityPublicKeyBytes, username: payload.from, deviceId: payload.senderDeviceId });
 }
 
 export async function decryptDirectMessageForSender(payload, senderIdentity) {
-  assertCrypto();
-  const aesKey = await deriveCombinedAesKey(
-    [senderIdentity.privateKey, senderIdentity.privateKey],
-    [payload.recipientSignedPrekeyPublic, payload.recipientOneTimePrekeyPublic],
-    DIRECT_INFO,
-  );
-  const plaintext = await subtle.decrypt(
-    { name: "AES-GCM", iv: payload.nonce },
-    aesKey,
-    payload.ciphertext,
-  );
-  return decoder.decode(plaintext);
+  return decryptRatchetMessage(payload, senderIdentity, { username: payload.to || payload.targetUsername || "peer", deviceId: payload.targetDeviceId || "" });
 }
 
 export async function createGroupKeyPackage(conversationId, version, senderIdentity, recipients) {
@@ -333,9 +280,9 @@ export async function createGroupKeyPackage(conversationId, version, senderIdent
   const envelopes = [];
 
   for (const recipient of recipients) {
-    const aesKey = await deriveCombinedAesKey(
-      [senderIdentity.privateKey],
-      [recipient.publicKeyBytes],
+    const aesKey = await deriveX25519AesKey(
+      senderIdentity.signedPrekey.privateKeyBytes,
+      recipient.signedPrekeyPublicBytes || recipient.publicKeyBytes,
       GROUP_ENVELOPE_INFO,
     );
     const nonce = crypto.getRandomValues(new Uint8Array(12));
@@ -349,7 +296,7 @@ export async function createGroupKeyPackage(conversationId, version, senderIdent
       deviceId: recipient.deviceId,
       encryptedKey,
       nonce,
-      senderKeyId: senderIdentity.keyId,
+      senderKeyId: senderIdentity.signedPrekey.keyId,
       recipientKeyId: recipient.keyId,
     });
   }
@@ -365,9 +312,9 @@ export async function createGroupKeyPackage(conversationId, version, senderIdent
 
 export async function decryptGroupKeyEnvelope(envelope, recipientIdentity, senderPublicKeyBytes) {
   assertCrypto();
-  const aesKey = await deriveCombinedAesKey(
-    [recipientIdentity.privateKey],
-    [senderPublicKeyBytes],
+  const aesKey = await deriveX25519AesKey(
+    recipientIdentity.signedPrekey.privateKeyBytes,
+    senderPublicKeyBytes,
     GROUP_ENVELOPE_INFO,
   );
   const rawKey = await subtle.decrypt(

@@ -18,6 +18,8 @@ public  final class PublishPrekeyBundleRequest extends
     signedPrekeyAlgorithm_ = "";
     signedPrekeyPublicKey_ = com.google.protobuf.ByteString.EMPTY;
     oneTimePrekeys_ = emptyProtobufList();
+    signedPrekeySignature_ = com.google.protobuf.ByteString.EMPTY;
+    signedPrekeySignatureAlgorithm_ = "";
   }
   public static final int SIGNED_PREKEY_ID_FIELD_NUMBER = 1;
   private java.lang.String signedPrekeyId_;
@@ -237,6 +239,81 @@ public  final class PublishPrekeyBundleRequest extends
   private void removeOneTimePrekeys(int index) {
     ensureOneTimePrekeysIsMutable();
     oneTimePrekeys_.remove(index);
+  }
+
+  public static final int SIGNED_PREKEY_SIGNATURE_FIELD_NUMBER = 5;
+  private com.google.protobuf.ByteString signedPrekeySignature_;
+  /**
+   * <code>bytes signed_prekey_signature = 5;</code>
+   * @return The signedPrekeySignature.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString getSignedPrekeySignature() {
+    return signedPrekeySignature_;
+  }
+  /**
+   * <code>bytes signed_prekey_signature = 5;</code>
+   * @param value The signedPrekeySignature to set.
+   */
+  private void setSignedPrekeySignature(com.google.protobuf.ByteString value) {
+    java.lang.Class<?> valueClass = value.getClass();
+  
+    signedPrekeySignature_ = value;
+  }
+  /**
+   * <code>bytes signed_prekey_signature = 5;</code>
+   */
+  private void clearSignedPrekeySignature() {
+
+    signedPrekeySignature_ = getDefaultInstance().getSignedPrekeySignature();
+  }
+
+  public static final int SIGNED_PREKEY_SIGNATURE_ALGORITHM_FIELD_NUMBER = 6;
+  private java.lang.String signedPrekeySignatureAlgorithm_;
+  /**
+   * <code>string signed_prekey_signature_algorithm = 6;</code>
+   * @return The signedPrekeySignatureAlgorithm.
+   */
+  @java.lang.Override
+  public java.lang.String getSignedPrekeySignatureAlgorithm() {
+    return signedPrekeySignatureAlgorithm_;
+  }
+  /**
+   * <code>string signed_prekey_signature_algorithm = 6;</code>
+   * @return The bytes for signedPrekeySignatureAlgorithm.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getSignedPrekeySignatureAlgorithmBytes() {
+    return com.google.protobuf.ByteString.copyFromUtf8(signedPrekeySignatureAlgorithm_);
+  }
+  /**
+   * <code>string signed_prekey_signature_algorithm = 6;</code>
+   * @param value The signedPrekeySignatureAlgorithm to set.
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setSignedPrekeySignatureAlgorithm(
+      java.lang.String value) {
+    value.getClass();  // minimal bytecode null check
+
+    signedPrekeySignatureAlgorithm_ = value;
+  }
+  /**
+   * <code>string signed_prekey_signature_algorithm = 6;</code>
+   */
+  private void clearSignedPrekeySignatureAlgorithm() {
+
+    signedPrekeySignatureAlgorithm_ = getDefaultInstance().getSignedPrekeySignatureAlgorithm();
+  }
+  /**
+   * <code>string signed_prekey_signature_algorithm = 6;</code>
+   * @param value The bytes for signedPrekeySignatureAlgorithm to set.
+   */
+  private void setSignedPrekeySignatureAlgorithmBytes(
+      com.google.protobuf.ByteString value) {
+    checkByteStringIsUtf8(value);
+    signedPrekeySignatureAlgorithm_ = value.toStringUtf8();
+
   }
 
   public static com.example.messenger.proto.PublishPrekeyBundleRequest parseFrom(
@@ -564,6 +641,83 @@ public  final class PublishPrekeyBundleRequest extends
       return this;
     }
 
+    /**
+     * <code>bytes signed_prekey_signature = 5;</code>
+     * @return The signedPrekeySignature.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString getSignedPrekeySignature() {
+      return instance.getSignedPrekeySignature();
+    }
+    /**
+     * <code>bytes signed_prekey_signature = 5;</code>
+     * @param value The signedPrekeySignature to set.
+     * @return This builder for chaining.
+     */
+    public Builder setSignedPrekeySignature(com.google.protobuf.ByteString value) {
+      copyOnWrite();
+      instance.setSignedPrekeySignature(value);
+      return this;
+    }
+    /**
+     * <code>bytes signed_prekey_signature = 5;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearSignedPrekeySignature() {
+      copyOnWrite();
+      instance.clearSignedPrekeySignature();
+      return this;
+    }
+
+    /**
+     * <code>string signed_prekey_signature_algorithm = 6;</code>
+     * @return The signedPrekeySignatureAlgorithm.
+     */
+    @java.lang.Override
+    public java.lang.String getSignedPrekeySignatureAlgorithm() {
+      return instance.getSignedPrekeySignatureAlgorithm();
+    }
+    /**
+     * <code>string signed_prekey_signature_algorithm = 6;</code>
+     * @return The bytes for signedPrekeySignatureAlgorithm.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getSignedPrekeySignatureAlgorithmBytes() {
+      return instance.getSignedPrekeySignatureAlgorithmBytes();
+    }
+    /**
+     * <code>string signed_prekey_signature_algorithm = 6;</code>
+     * @param value The signedPrekeySignatureAlgorithm to set.
+     * @return This builder for chaining.
+     */
+    public Builder setSignedPrekeySignatureAlgorithm(
+        java.lang.String value) {
+      copyOnWrite();
+      instance.setSignedPrekeySignatureAlgorithm(value);
+      return this;
+    }
+    /**
+     * <code>string signed_prekey_signature_algorithm = 6;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearSignedPrekeySignatureAlgorithm() {
+      copyOnWrite();
+      instance.clearSignedPrekeySignatureAlgorithm();
+      return this;
+    }
+    /**
+     * <code>string signed_prekey_signature_algorithm = 6;</code>
+     * @param value The bytes for signedPrekeySignatureAlgorithm to set.
+     * @return This builder for chaining.
+     */
+    public Builder setSignedPrekeySignatureAlgorithmBytes(
+        com.google.protobuf.ByteString value) {
+      copyOnWrite();
+      instance.setSignedPrekeySignatureAlgorithmBytes(value);
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:messenger.v1.PublishPrekeyBundleRequest)
   }
   @java.lang.Override
@@ -585,10 +739,12 @@ public  final class PublishPrekeyBundleRequest extends
             "signedPrekeyPublicKey_",
             "oneTimePrekeys_",
             com.example.messenger.proto.OneTimePrekeyUpload.class,
+            "signedPrekeySignature_",
+            "signedPrekeySignatureAlgorithm_",
           };
           java.lang.String info =
-              "\u0000\u0004\u0000\u0000\u0001\u0004\u0004\u0000\u0001\u0000\u0001\u0208\u0002\u0208" +
-              "\u0003\n\u0004\u001b";
+              "\u0000\u0006\u0000\u0000\u0001\u0006\u0006\u0000\u0001\u0000\u0001\u0208\u0002\u0208" +
+              "\u0003\n\u0004\u001b\u0005\n\u0006\u0208";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       // fall through

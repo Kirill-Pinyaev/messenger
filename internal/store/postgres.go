@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -53,6 +53,9 @@ func (s *PostgresMessageStore) Save(ctx context.Context, msg Message) (Message, 
 	if msg.RecipientOneTimePrekeyPublic == nil {
 		msg.RecipientOneTimePrekeyPublic = []byte{}
 	}
+	if msg.RatchetPublicKey == nil {
+		msg.RatchetPublicKey = []byte{}
+	}
 	msg.DirectEnvelopes = dedupeDirectEnvelopes(cloneDirectEnvelopes(msg.DirectEnvelopes))
 	msg.Attachments = cloneAttachments(msg.Attachments)
 
@@ -65,12 +68,14 @@ func (s *PostgresMessageStore) Save(ctx context.Context, msg Message) (Message, 
 	err = tx.QueryRow(ctx, `
 		INSERT INTO messages (
 			conversation_id, sender, recipient, sender_device_id, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
-			recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public, ts
+			recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public,
+			e2ee_algorithm, ratchet_public_key, previous_chain_length, message_number, ts
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 		RETURNING id
 	`, msg.ConversationID, msg.From, msg.To, msg.SenderDeviceID, msg.Text, msg.Ciphertext, msg.Nonce, msg.SenderKeyID, msg.KeyVersion, msg.Encrypted,
-		msg.RecipientSignedPrekeyID, msg.RecipientSignedPrekeyPublic, msg.RecipientOneTimePrekeyID, msg.RecipientOneTimePrekeyPublic, msg.TS).Scan(&msg.ID)
+		msg.RecipientSignedPrekeyID, msg.RecipientSignedPrekeyPublic, msg.RecipientOneTimePrekeyID, msg.RecipientOneTimePrekeyPublic,
+		msg.E2EEAlgorithm, msg.RatchetPublicKey, msg.PreviousChainLength, msg.MessageNumber, msg.TS).Scan(&msg.ID)
 	if err != nil {
 		return Message{}, err
 	}
@@ -98,10 +103,11 @@ func (s *PostgresMessageStore) Save(ctx context.Context, msg Message) (Message, 
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO attachment_descriptor_envelopes (
 					message_id, attachment_id, target_username, target_device_id, encrypted_descriptor, descriptor_nonce,
-					recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public
+					recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public,
+					e2ee_algorithm, ratchet_public_key, previous_chain_length, message_number
 				)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-			`, msg.ID, attachment.AttachmentID, envelope.TargetUsername, envelope.TargetDeviceID, envelope.EncryptedDescriptor, envelope.DescriptorNonce, envelope.RecipientSignedPrekeyID, envelope.RecipientSignedPrekeyPublic, envelope.RecipientOneTimePrekeyID, envelope.RecipientOneTimePrekeyPublic); err != nil {
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			`, msg.ID, attachment.AttachmentID, envelope.TargetUsername, envelope.TargetDeviceID, envelope.EncryptedDescriptor, envelope.DescriptorNonce, envelope.RecipientSignedPrekeyID, envelope.RecipientSignedPrekeyPublic, envelope.RecipientOneTimePrekeyID, envelope.RecipientOneTimePrekeyPublic, envelope.E2EEAlgorithm, envelope.RatchetPublicKey, envelope.PreviousChainLength, envelope.MessageNumber); err != nil {
 				return Message{}, err
 			}
 		}
@@ -111,10 +117,11 @@ func (s *PostgresMessageStore) Save(ctx context.Context, msg Message) (Message, 
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO direct_message_envelopes (
 				message_id, target_username, target_device_id, ciphertext, nonce,
-				recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public
+				recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public,
+				e2ee_algorithm, ratchet_public_key, previous_chain_length, message_number
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		`, msg.ID, envelope.TargetUsername, envelope.TargetDeviceID, envelope.Ciphertext, envelope.Nonce, envelope.RecipientSignedPrekeyID, envelope.RecipientSignedPrekeyPublic, envelope.RecipientOneTimePrekeyID, envelope.RecipientOneTimePrekeyPublic); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		`, msg.ID, envelope.TargetUsername, envelope.TargetDeviceID, envelope.Ciphertext, envelope.Nonce, envelope.RecipientSignedPrekeyID, envelope.RecipientSignedPrekeyPublic, envelope.RecipientOneTimePrekeyID, envelope.RecipientOneTimePrekeyPublic, envelope.E2EEAlgorithm, envelope.RatchetPublicKey, envelope.PreviousChainLength, envelope.MessageNumber); err != nil {
 			return Message{}, err
 		}
 	}
@@ -135,7 +142,8 @@ func (s *PostgresMessageStore) History(ctx context.Context, conversationID strin
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, conversation_id, sender, recipient, sender_device_id, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
-		       recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public, ts
+		       recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public,
+		       e2ee_algorithm, ratchet_public_key, previous_chain_length, message_number, ts
 		FROM messages
 		WHERE conversation_id = $1
 		ORDER BY ts DESC
@@ -150,7 +158,8 @@ func (s *PostgresMessageStore) History(ctx context.Context, conversationID strin
 	for rows.Next() {
 		var msg Message
 		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.SenderDeviceID, &msg.Text, &msg.Ciphertext, &msg.Nonce, &msg.SenderKeyID, &msg.KeyVersion, &msg.Encrypted,
-			&msg.RecipientSignedPrekeyID, &msg.RecipientSignedPrekeyPublic, &msg.RecipientOneTimePrekeyID, &msg.RecipientOneTimePrekeyPublic, &msg.TS); err != nil {
+			&msg.RecipientSignedPrekeyID, &msg.RecipientSignedPrekeyPublic, &msg.RecipientOneTimePrekeyID, &msg.RecipientOneTimePrekeyPublic,
+			&msg.E2EEAlgorithm, &msg.RatchetPublicKey, &msg.PreviousChainLength, &msg.MessageNumber, &msg.TS); err != nil {
 			return nil, err
 		}
 		out = append(out, msg)
@@ -238,7 +247,8 @@ func (s *PostgresMessageStore) SearchMessages(ctx context.Context, username, que
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, conversation_id, sender, recipient, sender_device_id, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
-		       recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public, ts
+		       recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public,
+		       e2ee_algorithm, ratchet_public_key, previous_chain_length, message_number, ts
 		FROM messages
 		WHERE (sender = $1 OR recipient = $1
 		       OR conversation_id IN (
@@ -258,7 +268,8 @@ func (s *PostgresMessageStore) SearchMessages(ctx context.Context, username, que
 	for rows.Next() {
 		var msg Message
 		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.SenderDeviceID, &msg.Text, &msg.Ciphertext, &msg.Nonce, &msg.SenderKeyID, &msg.KeyVersion, &msg.Encrypted,
-			&msg.RecipientSignedPrekeyID, &msg.RecipientSignedPrekeyPublic, &msg.RecipientOneTimePrekeyID, &msg.RecipientOneTimePrekeyPublic, &msg.TS); err != nil {
+			&msg.RecipientSignedPrekeyID, &msg.RecipientSignedPrekeyPublic, &msg.RecipientOneTimePrekeyID, &msg.RecipientOneTimePrekeyPublic,
+			&msg.E2EEAlgorithm, &msg.RatchetPublicKey, &msg.PreviousChainLength, &msg.MessageNumber, &msg.TS); err != nil {
 			return nil, err
 		}
 		attachments, err := s.attachmentsForMessage(ctx, msg.ID)
@@ -282,11 +293,13 @@ func (s *PostgresMessageStore) GetByID(ctx context.Context, id int64) (Message, 
 	var msg Message
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, conversation_id, sender, recipient, sender_device_id, body, ciphertext, nonce, sender_key_id, conversation_key_version, encrypted,
-		       recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public, ts
+		       recipient_signed_prekey_id, recipient_signed_prekey_public, recipient_one_time_prekey_id, recipient_one_time_prekey_public,
+		       e2ee_algorithm, ratchet_public_key, previous_chain_length, message_number, ts
 		FROM messages
 		WHERE id = $1
 	`, id).Scan(&msg.ID, &msg.ConversationID, &msg.From, &msg.To, &msg.SenderDeviceID, &msg.Text, &msg.Ciphertext, &msg.Nonce, &msg.SenderKeyID, &msg.KeyVersion, &msg.Encrypted,
-		&msg.RecipientSignedPrekeyID, &msg.RecipientSignedPrekeyPublic, &msg.RecipientOneTimePrekeyID, &msg.RecipientOneTimePrekeyPublic, &msg.TS)
+		&msg.RecipientSignedPrekeyID, &msg.RecipientSignedPrekeyPublic, &msg.RecipientOneTimePrekeyID, &msg.RecipientOneTimePrekeyPublic,
+		&msg.E2EEAlgorithm, &msg.RatchetPublicKey, &msg.PreviousChainLength, &msg.MessageNumber, &msg.TS)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Message{}, ErrMessageNotFound
@@ -499,7 +512,8 @@ func (s *PostgresMessageStore) directEnvelopesForMessage(ctx context.Context, me
 	rows, err := s.pool.Query(ctx, `
 		SELECT target_username, target_device_id, ciphertext, nonce,
 		       recipient_signed_prekey_id, recipient_signed_prekey_public,
-		       recipient_one_time_prekey_id, recipient_one_time_prekey_public
+		       recipient_one_time_prekey_id, recipient_one_time_prekey_public,
+		       e2ee_algorithm, ratchet_public_key, previous_chain_length, message_number
 		FROM direct_message_envelopes
 		WHERE message_id = $1
 		ORDER BY target_username, target_device_id
@@ -511,7 +525,7 @@ func (s *PostgresMessageStore) directEnvelopesForMessage(ctx context.Context, me
 	var out []DirectEnvelope
 	for rows.Next() {
 		var item DirectEnvelope
-		if err := rows.Scan(&item.TargetUsername, &item.TargetDeviceID, &item.Ciphertext, &item.Nonce, &item.RecipientSignedPrekeyID, &item.RecipientSignedPrekeyPublic, &item.RecipientOneTimePrekeyID, &item.RecipientOneTimePrekeyPublic); err != nil {
+		if err := rows.Scan(&item.TargetUsername, &item.TargetDeviceID, &item.Ciphertext, &item.Nonce, &item.RecipientSignedPrekeyID, &item.RecipientSignedPrekeyPublic, &item.RecipientOneTimePrekeyID, &item.RecipientOneTimePrekeyPublic, &item.E2EEAlgorithm, &item.RatchetPublicKey, &item.PreviousChainLength, &item.MessageNumber); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -523,7 +537,8 @@ func (s *PostgresMessageStore) attachmentDirectEnvelopesForAttachment(ctx contex
 	rows, err := s.pool.Query(ctx, `
 		SELECT target_username, target_device_id, encrypted_descriptor, descriptor_nonce,
 		       recipient_signed_prekey_id, recipient_signed_prekey_public,
-		       recipient_one_time_prekey_id, recipient_one_time_prekey_public
+		       recipient_one_time_prekey_id, recipient_one_time_prekey_public,
+		       e2ee_algorithm, ratchet_public_key, previous_chain_length, message_number
 		FROM attachment_descriptor_envelopes
 		WHERE message_id = $1 AND attachment_id = $2
 		ORDER BY target_username, target_device_id
@@ -535,7 +550,7 @@ func (s *PostgresMessageStore) attachmentDirectEnvelopesForAttachment(ctx contex
 	var out []AttachmentDirectEnvelope
 	for rows.Next() {
 		var item AttachmentDirectEnvelope
-		if err := rows.Scan(&item.TargetUsername, &item.TargetDeviceID, &item.EncryptedDescriptor, &item.DescriptorNonce, &item.RecipientSignedPrekeyID, &item.RecipientSignedPrekeyPublic, &item.RecipientOneTimePrekeyID, &item.RecipientOneTimePrekeyPublic); err != nil {
+		if err := rows.Scan(&item.TargetUsername, &item.TargetDeviceID, &item.EncryptedDescriptor, &item.DescriptorNonce, &item.RecipientSignedPrekeyID, &item.RecipientSignedPrekeyPublic, &item.RecipientOneTimePrekeyID, &item.RecipientOneTimePrekeyPublic, &item.E2EEAlgorithm, &item.RatchetPublicKey, &item.PreviousChainLength, &item.MessageNumber); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -561,6 +576,10 @@ func (s *PostgresMessageStore) initSchema(ctx context.Context) error {
 			recipient_signed_prekey_public BYTEA NOT NULL DEFAULT ''::bytea,
 			recipient_one_time_prekey_id TEXT NOT NULL DEFAULT '',
 			recipient_one_time_prekey_public BYTEA NOT NULL DEFAULT ''::bytea,
+			e2ee_algorithm TEXT NOT NULL DEFAULT '',
+			ratchet_public_key BYTEA NOT NULL DEFAULT ''::bytea,
+			previous_chain_length INTEGER NOT NULL DEFAULT 0,
+			message_number INTEGER NOT NULL DEFAULT 0,
 			ts TIMESTAMPTZ NOT NULL
 		);
 
@@ -606,6 +625,10 @@ func (s *PostgresMessageStore) initSchema(ctx context.Context) error {
 			recipient_signed_prekey_public BYTEA NOT NULL DEFAULT ''::bytea,
 			recipient_one_time_prekey_id TEXT NOT NULL DEFAULT '',
 			recipient_one_time_prekey_public BYTEA NOT NULL DEFAULT ''::bytea,
+			e2ee_algorithm TEXT NOT NULL DEFAULT '',
+			ratchet_public_key BYTEA NOT NULL DEFAULT ''::bytea,
+			previous_chain_length INTEGER NOT NULL DEFAULT 0,
+			message_number INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (message_id, target_username, target_device_id)
 		);
 		CREATE TABLE IF NOT EXISTS attachment_descriptor_envelopes (
@@ -619,6 +642,10 @@ func (s *PostgresMessageStore) initSchema(ctx context.Context) error {
 			recipient_signed_prekey_public BYTEA NOT NULL DEFAULT ''::bytea,
 			recipient_one_time_prekey_id TEXT NOT NULL DEFAULT '',
 			recipient_one_time_prekey_public BYTEA NOT NULL DEFAULT ''::bytea,
+			e2ee_algorithm TEXT NOT NULL DEFAULT '',
+			ratchet_public_key BYTEA NOT NULL DEFAULT ''::bytea,
+			previous_chain_length INTEGER NOT NULL DEFAULT 0,
+			message_number INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (message_id, attachment_id, target_username, target_device_id)
 		);
 
@@ -635,7 +662,21 @@ func (s *PostgresMessageStore) initSchema(ctx context.Context) error {
 
 		ALTER TABLE messages
 			ADD COLUMN IF NOT EXISTS sender_device_id TEXT NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS e2ee_algorithm TEXT NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS ratchet_public_key BYTEA NOT NULL DEFAULT ''::bytea,
+			ADD COLUMN IF NOT EXISTS previous_chain_length INTEGER NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS message_number INTEGER NOT NULL DEFAULT 0,
 			ALTER COLUMN body SET DEFAULT '';
+		ALTER TABLE direct_message_envelopes
+			ADD COLUMN IF NOT EXISTS e2ee_algorithm TEXT NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS ratchet_public_key BYTEA NOT NULL DEFAULT ''::bytea,
+			ADD COLUMN IF NOT EXISTS previous_chain_length INTEGER NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS message_number INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE attachment_descriptor_envelopes
+			ADD COLUMN IF NOT EXISTS e2ee_algorithm TEXT NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS ratchet_public_key BYTEA NOT NULL DEFAULT ''::bytea,
+			ADD COLUMN IF NOT EXISTS previous_chain_length INTEGER NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS message_number INTEGER NOT NULL DEFAULT 0;
 	`)
 	return err
 }

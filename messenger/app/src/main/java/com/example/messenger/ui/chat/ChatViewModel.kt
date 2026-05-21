@@ -10,6 +10,11 @@ import com.example.messenger.App
 import com.example.messenger.crypto.ArchiveE2EE
 import com.example.messenger.crypto.E2EE
 import com.example.messenger.crypto.IdentityState
+import com.example.messenger.crypto.DoubleRatchet
+import com.example.messenger.crypto.RatchetIdentity
+import com.example.messenger.crypto.RatchetIdentityKey
+import com.example.messenger.crypto.RatchetMessage
+import com.example.messenger.crypto.RatchetPrekeyBundle
 import com.example.messenger.data.MessengerRepository
 import com.example.messenger.proto.Attachment
 import com.example.messenger.proto.AttachmentDirectEnvelope
@@ -412,54 +417,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun decryptIncomingDirectCiphertext(msg: Message, identity: IdentityState): String {
         val senderPub = fetchSenderIdentity(msg.from, msg.senderKeyId)
-        val otpPriv = msg.recipientOneTimePrekeyId
-            .takeIf { it.isNotEmpty() }
-            ?.let { id -> identity.findOtp(id)?.privateBytes?.let { E2EE.importPrivateKey(it) } }
-        return E2EE.decryptDirectMessage(
-            msg.ciphertext.toByteArray(),
-            msg.nonce.toByteArray(),
-            identity.signedPrekeyPrivateKey(),
-            otpPriv,
-            senderPub
-        )
+        return DoubleRatchet.decrypt(msg.toRatchetMessage(), identity.toRatchetIdentity(), RatchetIdentityKey(msg.from, msg.senderDeviceId, msg.senderKeyId, senderPub), activeConversationId)
     }
 
     private fun decryptOwnDirectCiphertext(msg: Message, identity: IdentityState): String {
-        val spkPub = msg.recipientSignedPrekeyPublic.toByteArray()
-        val otpPub = msg.recipientOneTimePrekeyPublic.takeIf { !it.isEmpty }?.toByteArray()
-        val key = E2EE.run {
-            val priv = identity.identityPrivateKey()
-            val secrets = mutableListOf(ecdh(priv, importPublicKey(spkPub)))
-            if (otpPub != null) secrets += ecdh(priv, importPublicKey(otpPub))
-            hkdf(secrets.reduce { a, b -> a + b }, info = "messenger-direct-prekey-v1")
-        }
-        return String(E2EE.aesGcmDecrypt(key, msg.ciphertext.toByteArray(), msg.nonce.toByteArray()), Charsets.UTF_8)
+        return "[Не удалось расшифровать]"
     }
 
     private fun decryptOwnDescriptor(msg: Message, item: Attachment, identity: IdentityState): String {
-        val key = E2EE.run {
-            val priv = identity.identityPrivateKey()
-            val secrets = mutableListOf(ecdh(priv, importPublicKey(msg.recipientSignedPrekeyPublic.toByteArray())))
-            if (!msg.recipientOneTimePrekeyPublic.isEmpty) {
-                secrets += ecdh(priv, importPublicKey(msg.recipientOneTimePrekeyPublic.toByteArray()))
-            }
-            hkdf(secrets.reduce { a, b -> a + b }, info = "messenger-direct-prekey-v1")
-        }
-        return String(E2EE.aesGcmDecrypt(key, item.encryptedDescriptor.toByteArray(), item.descriptorNonce.toByteArray()), Charsets.UTF_8)
+        return "[Не удалось расшифровать]"
     }
 
     private suspend fun decryptIncomingDescriptor(msg: Message, item: Attachment, identity: IdentityState): String {
         val senderPub = fetchSenderIdentity(msg.from, msg.senderKeyId)
-        val otpPriv = msg.recipientOneTimePrekeyId
-            .takeIf { it.isNotEmpty() }
-            ?.let { id -> identity.findOtp(id)?.privateBytes?.let { E2EE.importPrivateKey(it) } }
-        return E2EE.decryptDirectMessage(
-            item.encryptedDescriptor.toByteArray(),
-            item.descriptorNonce.toByteArray(),
-            identity.signedPrekeyPrivateKey(),
-            otpPriv,
-            senderPub
-        )
+        return DoubleRatchet.decrypt(msg.toRatchetMessage(item), identity.toRatchetIdentity(), RatchetIdentityKey(msg.from, msg.senderDeviceId, msg.senderKeyId, senderPub), activeConversationId)
     }
 
     private suspend fun fetchSenderIdentity(username: String, keyId: String): ByteArray {
@@ -478,19 +449,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         plaintext: String,
         targets: List<DirectBundleTarget>,
     ): List<DirectMessageEnvelope> = targets.map { target ->
-        val encrypted = E2EE.encryptDirectMessage(
-            plaintext = plaintext,
-            senderIdentPriv = identity.identityPrivateKey(),
-            recipientSpkPub = target.signedPrekeyPublic,
-            recipientOtpPub = target.oneTimePrekeyPublic,
-        )
+        val encrypted = DoubleRatchet.encrypt(plaintext, identity.toRatchetIdentity(), target.toRatchetBundle(), activeConversationId)
         DirectMessageEnvelope.newBuilder()
             .setTargetUsername(target.username)
             .setTargetDeviceId(target.deviceId)
-            .setCiphertext(ByteString.copyFrom(encrypted.first))
-            .setNonce(ByteString.copyFrom(encrypted.second))
+            .setCiphertext(ByteString.copyFrom(encrypted.ciphertext))
+            .setNonce(ByteString.copyFrom(encrypted.nonce))
             .setRecipientSignedPrekeyId(target.signedPrekeyId)
             .setRecipientSignedPrekeyPublic(ByteString.copyFrom(target.signedPrekeyPublic))
+            .setE2EeAlgorithm(encrypted.e2eeAlgorithm)
+            .setRatchetPublicKey(ByteString.copyFrom(encrypted.ratchetPublicKey))
+            .setPreviousChainLength(encrypted.previousChainLength)
+            .setMessageNumber(encrypted.messageNumber)
             .apply {
                 if (target.oneTimePrekeyId.isNotBlank()) {
                     recipientOneTimePrekeyId = target.oneTimePrekeyId
@@ -507,19 +477,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         descriptorJson: String,
         targets: List<DirectBundleTarget>,
     ): List<AttachmentDirectEnvelope> = targets.map { target ->
-        val encrypted = E2EE.encryptDirectMessage(
-            plaintext = descriptorJson,
-            senderIdentPriv = identity.identityPrivateKey(),
-            recipientSpkPub = target.signedPrekeyPublic,
-            recipientOtpPub = target.oneTimePrekeyPublic,
-        )
+        val encrypted = DoubleRatchet.encrypt(descriptorJson, identity.toRatchetIdentity(), target.toRatchetBundle(), activeConversationId)
         AttachmentDirectEnvelope.newBuilder()
             .setTargetUsername(target.username)
             .setTargetDeviceId(target.deviceId)
-            .setEncryptedDescriptor(ByteString.copyFrom(encrypted.first))
-            .setDescriptorNonce(ByteString.copyFrom(encrypted.second))
+            .setEncryptedDescriptor(ByteString.copyFrom(encrypted.ciphertext))
+            .setDescriptorNonce(ByteString.copyFrom(encrypted.nonce))
             .setRecipientSignedPrekeyId(target.signedPrekeyId)
             .setRecipientSignedPrekeyPublic(ByteString.copyFrom(target.signedPrekeyPublic))
+            .setE2EeAlgorithm(encrypted.e2eeAlgorithm)
+            .setRatchetPublicKey(ByteString.copyFrom(encrypted.ratchetPublicKey))
+            .setPreviousChainLength(encrypted.previousChainLength)
+            .setMessageNumber(encrypted.messageNumber)
             .apply {
                 if (target.oneTimePrekeyId.isNotBlank()) {
                     recipientOneTimePrekeyId = target.oneTimePrekeyId
@@ -926,3 +895,41 @@ private fun jsonArrayToByteArray(array: JSONArray?): ByteArray {
     }
     return ByteArray(array.length()) { index -> array.optInt(index).toByte() }
 }
+
+private fun IdentityState.toRatchetIdentity(): RatchetIdentity = RatchetIdentity(
+    username = username,
+    deviceId = deviceId,
+    keyId = keyId,
+    identityPrivate = privateKeyBytes,
+    identityPublic = publicKeyBytes,
+    signedPrekeyId = signedPrekeyId,
+    signedPrekeyPrivate = signedPrekeyPrivateBytes,
+    signedPrekeyPublic = signedPrekeyPublicBytes,
+    signedPrekeySignature = signedPrekeySignature,
+)
+
+private fun DirectBundleTarget.toRatchetBundle(): RatchetPrekeyBundle = RatchetPrekeyBundle(
+    username = username,
+    deviceId = deviceId,
+    identityKeyId = identityKeyId,
+    identityPublic = identityPublic,
+    signedPrekeyId = signedPrekeyId,
+    signedPrekeyPublic = signedPrekeyPublic,
+    signedPrekeySignature = signedPrekeySignature,
+    oneTimePrekeyId = oneTimePrekeyId,
+    oneTimePrekeyPublic = oneTimePrekeyPublic,
+)
+
+private fun Message.toRatchetMessage(attachment: Attachment? = null): RatchetMessage = RatchetMessage(
+    ciphertext = attachment?.encryptedDescriptor?.toByteArray() ?: ciphertext.toByteArray(),
+    nonce = attachment?.descriptorNonce?.toByteArray() ?: nonce.toByteArray(),
+    senderKeyId = senderKeyId,
+    recipientSignedPrekeyId = recipientSignedPrekeyId,
+    recipientSignedPrekeyPublic = recipientSignedPrekeyPublic.toByteArray(),
+    recipientOneTimePrekeyId = recipientOneTimePrekeyId,
+    recipientOneTimePrekeyPublic = recipientOneTimePrekeyPublic.takeIf { !it.isEmpty }?.toByteArray(),
+    e2eeAlgorithm = e2EeAlgorithm,
+    ratchetPublicKey = ratchetPublicKey.toByteArray(),
+    previousChainLength = previousChainLength,
+    messageNumber = messageNumber,
+)

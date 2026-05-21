@@ -66,9 +66,11 @@ dependencies {
     // Coroutines + DataStore
     implementation(libs.coroutines.android)
     implementation(libs.datastore.preferences)
+    implementation(libs.bouncycastle.bcprov)
 
     debugImplementation(libs.compose.ui.tooling)
     testImplementation(libs.junit)
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }

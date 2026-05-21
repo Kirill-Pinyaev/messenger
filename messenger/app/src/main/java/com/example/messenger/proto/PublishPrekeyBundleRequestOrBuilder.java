@@ -52,4 +52,22 @@ public interface PublishPrekeyBundleRequestOrBuilder extends
    * <code>repeated .messenger.v1.OneTimePrekeyUpload one_time_prekeys = 4;</code>
    */
   int getOneTimePrekeysCount();
+
+  /**
+   * <code>bytes signed_prekey_signature = 5;</code>
+   * @return The signedPrekeySignature.
+   */
+  com.google.protobuf.ByteString getSignedPrekeySignature();
+
+  /**
+   * <code>string signed_prekey_signature_algorithm = 6;</code>
+   * @return The signedPrekeySignatureAlgorithm.
+   */
+  java.lang.String getSignedPrekeySignatureAlgorithm();
+  /**
+   * <code>string signed_prekey_signature_algorithm = 6;</code>
+   * @return The bytes for signedPrekeySignatureAlgorithm.
+   */
+  com.google.protobuf.ByteString
+      getSignedPrekeySignatureAlgorithmBytes();
 }

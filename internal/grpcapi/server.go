@@ -29,26 +29,36 @@ import (
 var multiDeviceMarker = []byte("__multi_device__")
 var errDirectMessageUnavailableForDevice = errors.New("direct message unavailable for device")
 
+const doubleRatchetAlgorithm = "DR-X25519-HKDF-SHA256-AESGCM-Ed25519-v1"
+
 type storedDirectEnvelope struct {
-	TargetUsername              string `json:"target_username"`
-	TargetDeviceID              string `json:"target_device_id"`
-	Ciphertext                  []byte `json:"ciphertext"`
-	Nonce                       []byte `json:"nonce"`
-	RecipientSignedPrekeyID     string `json:"recipient_signed_prekey_id"`
-	RecipientSignedPrekeyPublic []byte `json:"recipient_signed_prekey_public"`
-	RecipientOneTimePrekeyID    string `json:"recipient_one_time_prekey_id"`
+	TargetUsername               string `json:"target_username"`
+	TargetDeviceID               string `json:"target_device_id"`
+	Ciphertext                   []byte `json:"ciphertext"`
+	Nonce                        []byte `json:"nonce"`
+	RecipientSignedPrekeyID      string `json:"recipient_signed_prekey_id"`
+	RecipientSignedPrekeyPublic  []byte `json:"recipient_signed_prekey_public"`
+	RecipientOneTimePrekeyID     string `json:"recipient_one_time_prekey_id"`
 	RecipientOneTimePrekeyPublic []byte `json:"recipient_one_time_prekey_public"`
+	E2EEAlgorithm                string `json:"e2ee_algorithm"`
+	RatchetPublicKey             []byte `json:"ratchet_public_key"`
+	PreviousChainLength          int32  `json:"previous_chain_length"`
+	MessageNumber                int32  `json:"message_number"`
 }
 
 type storedAttachmentDirectEnvelope struct {
-	TargetUsername      string `json:"target_username"`
-	TargetDeviceID      string `json:"target_device_id"`
-	EncryptedDescriptor []byte `json:"encrypted_descriptor"`
-	DescriptorNonce     []byte `json:"descriptor_nonce"`
-	RecipientSignedPrekeyID     string `json:"recipient_signed_prekey_id"`
-	RecipientSignedPrekeyPublic []byte `json:"recipient_signed_prekey_public"`
-	RecipientOneTimePrekeyID    string `json:"recipient_one_time_prekey_id"`
+	TargetUsername               string `json:"target_username"`
+	TargetDeviceID               string `json:"target_device_id"`
+	EncryptedDescriptor          []byte `json:"encrypted_descriptor"`
+	DescriptorNonce              []byte `json:"descriptor_nonce"`
+	RecipientSignedPrekeyID      string `json:"recipient_signed_prekey_id"`
+	RecipientSignedPrekeyPublic  []byte `json:"recipient_signed_prekey_public"`
+	RecipientOneTimePrekeyID     string `json:"recipient_one_time_prekey_id"`
 	RecipientOneTimePrekeyPublic []byte `json:"recipient_one_time_prekey_public"`
+	E2EEAlgorithm                string `json:"e2ee_algorithm"`
+	RatchetPublicKey             []byte `json:"ratchet_public_key"`
+	PreviousChainLength          int32  `json:"previous_chain_length"`
+	MessageNumber                int32  `json:"message_number"`
 }
 
 type Server struct {
@@ -56,28 +66,28 @@ type Server struct {
 	messengerv1.UnimplementedUserServiceServer
 	messengerv1.UnimplementedMessageServiceServer
 
-	authSvc   *auth.Service
-	userStore store.UserStore
-	msgStore  store.MessageStore
-	convStore store.ConversationStore
-	keyStore  store.KeyStore
+	authSvc      *auth.Service
+	userStore    store.UserStore
+	msgStore     store.MessageStore
+	convStore    store.ConversationStore
+	keyStore     store.KeyStore
 	archiveStore store.ArchiveStore
-	groupState store.GroupStateStore
-	mediaRoot string
-	hub       *eventHub
+	groupState   store.GroupStateStore
+	mediaRoot    string
+	hub          *eventHub
 }
 
 func NewServer(authSvc *auth.Service, userStore store.UserStore, msgStore store.MessageStore, convStore store.ConversationStore, keyStore store.KeyStore, archiveStore store.ArchiveStore) *Server {
 	return &Server{
-		authSvc:   authSvc,
-		userStore: userStore,
-		msgStore:  msgStore,
-		convStore: convStore,
-		keyStore:  keyStore,
+		authSvc:      authSvc,
+		userStore:    userStore,
+		msgStore:     msgStore,
+		convStore:    convStore,
+		keyStore:     keyStore,
 		archiveStore: archiveStore,
-		groupState: store.NewGroupStateStore(convStore, keyStore),
-		mediaRoot: defaultMediaRoot(),
-		hub:       newEventHub(),
+		groupState:   store.NewGroupStateStore(convStore, keyStore),
+		mediaRoot:    defaultMediaRoot(),
+		hub:          newEventHub(),
 	}
 }
 
@@ -287,13 +297,18 @@ func (s *Server) PublishPrekeyBundle(ctx context.Context, req *messengerv1.Publi
 		return nil, status.Error(codes.Internal, "failed to load signed prekey")
 	}
 	resetOTPQueue := err == nil && (existingSignedPrekey.KeyID != req.GetSignedPrekeyId() || !slices.Equal(existingSignedPrekey.PublicKey, req.GetSignedPrekeyPublicKey()))
+	if req.GetSignedPrekeyAlgorithm() == "X25519" && (len(req.GetSignedPrekeySignature()) == 0 || req.GetSignedPrekeySignatureAlgorithm() == "") {
+		return nil, status.Error(codes.InvalidArgument, "signed prekey signature required")
+	}
 
 	signedPrekey, err := s.keyStore.UpsertSignedPrekey(ctx, store.SignedPrekey{
-		Username:  username,
-		DeviceID:  deviceID,
-		KeyID:     req.GetSignedPrekeyId(),
-		Algorithm: req.GetSignedPrekeyAlgorithm(),
-		PublicKey: req.GetSignedPrekeyPublicKey(),
+		Username:           username,
+		DeviceID:           deviceID,
+		KeyID:              req.GetSignedPrekeyId(),
+		Algorithm:          req.GetSignedPrekeyAlgorithm(),
+		PublicKey:          req.GetSignedPrekeyPublicKey(),
+		Signature:          req.GetSignedPrekeySignature(),
+		SignatureAlgorithm: req.GetSignedPrekeySignatureAlgorithm(),
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrBadInput) {
@@ -923,6 +938,10 @@ func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRe
 				RecipientSignedPrekeyPublic:  envelope.GetRecipientSignedPrekeyPublic(),
 				RecipientOneTimePrekeyID:     envelope.GetRecipientOneTimePrekeyId(),
 				RecipientOneTimePrekeyPublic: envelope.GetRecipientOneTimePrekeyPublic(),
+				E2EEAlgorithm:                envelope.GetE2EeAlgorithm(),
+				RatchetPublicKey:             envelope.GetRatchetPublicKey(),
+				PreviousChainLength:          envelope.GetPreviousChainLength(),
+				MessageNumber:                envelope.GetMessageNumber(),
 			})
 		}
 		attachments = append(attachments, store.Attachment{
@@ -944,6 +963,9 @@ func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRe
 
 	directEnvelopes := make([]store.DirectEnvelope, 0, len(req.GetDirectEnvelopes()))
 	for _, envelope := range req.GetDirectEnvelopes() {
+		if req.GetEncrypted() && req.GetConversationId() == "" && !validDirectEnvelopeV2(envelope.GetE2EeAlgorithm(), envelope.GetRatchetPublicKey(), envelope.GetNonce(), envelope.GetCiphertext()) {
+			return nil, status.Error(codes.InvalidArgument, "bad direct ratchet envelope")
+		}
 		directEnvelopes = append(directEnvelopes, store.DirectEnvelope{
 			TargetUsername:               envelope.GetTargetUsername(),
 			TargetDeviceID:               envelope.GetTargetDeviceId(),
@@ -953,27 +975,31 @@ func (s *Server) SendMessage(ctx context.Context, req *messengerv1.SendMessageRe
 			RecipientSignedPrekeyPublic:  envelope.GetRecipientSignedPrekeyPublic(),
 			RecipientOneTimePrekeyID:     envelope.GetRecipientOneTimePrekeyId(),
 			RecipientOneTimePrekeyPublic: envelope.GetRecipientOneTimePrekeyPublic(),
+			E2EEAlgorithm:                envelope.GetE2EeAlgorithm(),
+			RatchetPublicKey:             envelope.GetRatchetPublicKey(),
+			PreviousChainLength:          envelope.GetPreviousChainLength(),
+			MessageNumber:                envelope.GetMessageNumber(),
 		})
 	}
 
 	saved, err := s.msgStore.Save(ctx, store.Message{
-		ConversationID: convID,
-		From:           username,
-		To:             recipient,
-		SenderDeviceID: deviceID,
-		Text:           req.GetText(),
-		Ciphertext:     ciphertextToStore,
-		Nonce:          nonceToStore,
-		SenderKeyID:    req.GetSenderKeyId(),
-		KeyVersion:     req.GetConversationKeyVersion(),
-		Encrypted:      req.GetEncrypted(),
-		RecipientSignedPrekeyID: req.GetRecipientSignedPrekeyId(),
-		RecipientSignedPrekeyPublic: req.GetRecipientSignedPrekeyPublic(),
-		RecipientOneTimePrekeyID: req.GetRecipientOneTimePrekeyId(),
+		ConversationID:               convID,
+		From:                         username,
+		To:                           recipient,
+		SenderDeviceID:               deviceID,
+		Text:                         req.GetText(),
+		Ciphertext:                   ciphertextToStore,
+		Nonce:                        nonceToStore,
+		SenderKeyID:                  req.GetSenderKeyId(),
+		KeyVersion:                   req.GetConversationKeyVersion(),
+		Encrypted:                    req.GetEncrypted(),
+		RecipientSignedPrekeyID:      req.GetRecipientSignedPrekeyId(),
+		RecipientSignedPrekeyPublic:  req.GetRecipientSignedPrekeyPublic(),
+		RecipientOneTimePrekeyID:     req.GetRecipientOneTimePrekeyId(),
 		RecipientOneTimePrekeyPublic: req.GetRecipientOneTimePrekeyPublic(),
-		DirectEnvelopes: directEnvelopes,
-		Attachments:    attachments,
-		TS:             now,
+		DirectEnvelopes:              directEnvelopes,
+		Attachments:                  attachments,
+		TS:                           now,
 	})
 	if err != nil {
 		log.Printf("failed to save message: conv=%s from=%s to=%s encrypted=%t direct_envelopes=%d attachments=%d err=%v", convID, username, recipient, req.GetEncrypted(), len(directEnvelopes), len(attachments), err)
@@ -1281,14 +1307,14 @@ func (s *Server) GetMedia(ctx context.Context, req *messengerv1.GetMediaRequest)
 		return nil, status.Error(codes.Internal, "failed to read media")
 	}
 	return &messengerv1.GetMediaResponse{
-		MediaId:  media.MediaID,
+		MediaId:    media.MediaID,
 		Ciphertext: ciphertext,
-		Nonce:    media.Nonce,
-		Sha256:   media.SHA256,
-		SizeBytes: media.SizeBytes,
-		MimeType: media.MimeType,
-		Filename: media.Filename,
-		Kind:     attachmentKindToProto(media.Kind),
+		Nonce:      media.Nonce,
+		Sha256:     media.SHA256,
+		SizeBytes:  media.SizeBytes,
+		MimeType:   media.MimeType,
+		Filename:   media.Filename,
+		Kind:       attachmentKindToProto(media.Kind),
 	}, nil
 }
 
@@ -1418,23 +1444,27 @@ func messageFromStore(msg store.Message) *messengerv1.Message {
 		attachments = append(attachments, attachmentToProto(item))
 	}
 	return &messengerv1.Message{
-		MessageId:              msg.ID,
-		ConversationId:         msg.ConversationID,
-		From:                   msg.From,
-		To:                     msg.To,
-		SenderDeviceId:         msg.SenderDeviceID,
-		Text:                   msg.Text,
-		CreatedAt:              timestamppb.New(msg.TS),
-		Ciphertext:             msg.Ciphertext,
-		Nonce:                  msg.Nonce,
-		SenderKeyId:            msg.SenderKeyID,
-		ConversationKeyVersion: msg.KeyVersion,
-		Encrypted:              msg.Encrypted,
-		RecipientSignedPrekeyId: msg.RecipientSignedPrekeyID,
-		RecipientSignedPrekeyPublic: msg.RecipientSignedPrekeyPublic,
-		RecipientOneTimePrekeyId: msg.RecipientOneTimePrekeyID,
+		MessageId:                    msg.ID,
+		ConversationId:               msg.ConversationID,
+		From:                         msg.From,
+		To:                           msg.To,
+		SenderDeviceId:               msg.SenderDeviceID,
+		Text:                         msg.Text,
+		CreatedAt:                    timestamppb.New(msg.TS),
+		Ciphertext:                   msg.Ciphertext,
+		Nonce:                        msg.Nonce,
+		SenderKeyId:                  msg.SenderKeyID,
+		ConversationKeyVersion:       msg.KeyVersion,
+		Encrypted:                    msg.Encrypted,
+		RecipientSignedPrekeyId:      msg.RecipientSignedPrekeyID,
+		RecipientSignedPrekeyPublic:  msg.RecipientSignedPrekeyPublic,
+		RecipientOneTimePrekeyId:     msg.RecipientOneTimePrekeyID,
 		RecipientOneTimePrekeyPublic: msg.RecipientOneTimePrekeyPublic,
-		Attachments:            attachments,
+		E2EeAlgorithm:                msg.E2EEAlgorithm,
+		RatchetPublicKey:             msg.RatchetPublicKey,
+		PreviousChainLength:          msg.PreviousChainLength,
+		MessageNumber:                msg.MessageNumber,
+		Attachments:                  attachments,
 	}
 }
 
@@ -1462,6 +1492,10 @@ func (s *Server) projectMessageForDevice(msg store.Message, username, deviceID s
 					RecipientSignedPrekeyPublic:  item.RecipientSignedPrekeyPublic,
 					RecipientOneTimePrekeyID:     item.RecipientOneTimePrekeyID,
 					RecipientOneTimePrekeyPublic: item.RecipientOneTimePrekeyPublic,
+					E2EEAlgorithm:                item.E2EEAlgorithm,
+					RatchetPublicKey:             item.RatchetPublicKey,
+					PreviousChainLength:          item.PreviousChainLength,
+					MessageNumber:                item.MessageNumber,
 				})
 			}
 		}
@@ -1477,6 +1511,10 @@ func (s *Server) projectMessageForDevice(msg store.Message, username, deviceID s
 		projected.RecipientSignedPrekeyPublic = envelope.RecipientSignedPrekeyPublic
 		projected.RecipientOneTimePrekeyID = envelope.RecipientOneTimePrekeyID
 		projected.RecipientOneTimePrekeyPublic = envelope.RecipientOneTimePrekeyPublic
+		projected.E2EEAlgorithm = envelope.E2EEAlgorithm
+		projected.RatchetPublicKey = envelope.RatchetPublicKey
+		projected.PreviousChainLength = envelope.PreviousChainLength
+		projected.MessageNumber = envelope.MessageNumber
 	}
 
 	if isDirectEncrypted {
@@ -1501,6 +1539,10 @@ func (s *Server) projectMessageForDevice(msg store.Message, username, deviceID s
 						RecipientSignedPrekeyPublic:  item.RecipientSignedPrekeyPublic,
 						RecipientOneTimePrekeyID:     item.RecipientOneTimePrekeyID,
 						RecipientOneTimePrekeyPublic: item.RecipientOneTimePrekeyPublic,
+						E2EEAlgorithm:                item.E2EEAlgorithm,
+						RatchetPublicKey:             item.RatchetPublicKey,
+						PreviousChainLength:          item.PreviousChainLength,
+						MessageNumber:                item.MessageNumber,
 					})
 				}
 			}
@@ -1517,6 +1559,10 @@ func (s *Server) projectMessageForDevice(msg store.Message, username, deviceID s
 				projected.RecipientSignedPrekeyPublic = attachmentEnvelope.RecipientSignedPrekeyPublic
 				projected.RecipientOneTimePrekeyID = attachmentEnvelope.RecipientOneTimePrekeyID
 				projected.RecipientOneTimePrekeyPublic = attachmentEnvelope.RecipientOneTimePrekeyPublic
+				projected.E2EEAlgorithm = attachmentEnvelope.E2EEAlgorithm
+				projected.RatchetPublicKey = attachmentEnvelope.RatchetPublicKey
+				projected.PreviousChainLength = attachmentEnvelope.PreviousChainLength
+				projected.MessageNumber = attachmentEnvelope.MessageNumber
 			}
 		}
 	}
@@ -1558,9 +1604,17 @@ func encodeDirectEnvelopes(items []*messengerv1.DirectMessageEnvelope) ([]byte, 
 			RecipientSignedPrekeyPublic:  item.GetRecipientSignedPrekeyPublic(),
 			RecipientOneTimePrekeyID:     item.GetRecipientOneTimePrekeyId(),
 			RecipientOneTimePrekeyPublic: item.GetRecipientOneTimePrekeyPublic(),
+			E2EEAlgorithm:                item.GetE2EeAlgorithm(),
+			RatchetPublicKey:             item.GetRatchetPublicKey(),
+			PreviousChainLength:          item.GetPreviousChainLength(),
+			MessageNumber:                item.GetMessageNumber(),
 		})
 	}
 	return json.Marshal(envelopes)
+}
+
+func validDirectEnvelopeV2(algorithm string, ratchetPublicKey, nonce, ciphertext []byte) bool {
+	return algorithm == doubleRatchetAlgorithm && len(ratchetPublicKey) > 0 && len(nonce) > 0 && len(ciphertext) > 0
 }
 
 func decodeDirectEnvelopes(raw []byte) ([]storedDirectEnvelope, error) {
@@ -1591,14 +1645,18 @@ func encodeAttachmentDirectEnvelopes(items []*messengerv1.AttachmentDirectEnvelo
 	envelopes := make([]storedAttachmentDirectEnvelope, 0, len(items))
 	for _, item := range items {
 		envelopes = append(envelopes, storedAttachmentDirectEnvelope{
-			TargetUsername:      item.GetTargetUsername(),
-			TargetDeviceID:      item.GetTargetDeviceId(),
-			EncryptedDescriptor: item.GetEncryptedDescriptor(),
-			DescriptorNonce:     item.GetDescriptorNonce(),
-			RecipientSignedPrekeyID:     item.GetRecipientSignedPrekeyId(),
-			RecipientSignedPrekeyPublic: item.GetRecipientSignedPrekeyPublic(),
-			RecipientOneTimePrekeyID:    item.GetRecipientOneTimePrekeyId(),
+			TargetUsername:               item.GetTargetUsername(),
+			TargetDeviceID:               item.GetTargetDeviceId(),
+			EncryptedDescriptor:          item.GetEncryptedDescriptor(),
+			DescriptorNonce:              item.GetDescriptorNonce(),
+			RecipientSignedPrekeyID:      item.GetRecipientSignedPrekeyId(),
+			RecipientSignedPrekeyPublic:  item.GetRecipientSignedPrekeyPublic(),
+			RecipientOneTimePrekeyID:     item.GetRecipientOneTimePrekeyId(),
 			RecipientOneTimePrekeyPublic: item.GetRecipientOneTimePrekeyPublic(),
+			E2EEAlgorithm:                item.GetE2EeAlgorithm(),
+			RatchetPublicKey:             item.GetRatchetPublicKey(),
+			PreviousChainLength:          item.GetPreviousChainLength(),
+			MessageNumber:                item.GetMessageNumber(),
 		})
 	}
 	return json.Marshal(envelopes)
@@ -1820,12 +1878,14 @@ func signedPrekeyToProto(key store.SignedPrekey) *messengerv1.SignedPrekey {
 		return nil
 	}
 	return &messengerv1.SignedPrekey{
-		Username:    key.Username,
-		DeviceId:    key.DeviceID,
-		KeyId:       key.KeyID,
-		Algorithm:   key.Algorithm,
-		PublicKey:   key.PublicKey,
-		PublishedAt: timestamppb.New(key.PublishedAt),
+		Username:           key.Username,
+		DeviceId:           key.DeviceID,
+		KeyId:              key.KeyID,
+		Algorithm:          key.Algorithm,
+		PublicKey:          key.PublicKey,
+		Signature:          key.Signature,
+		SignatureAlgorithm: key.SignatureAlgorithm,
+		PublishedAt:        timestamppb.New(key.PublishedAt),
 	}
 }
 
@@ -1857,10 +1917,10 @@ func groupKeyUpdateFromProto(req *messengerv1.GroupKeyUpdate, conversationID, cr
 	}
 	return store.ConversationKey{
 		ConversationID: conversationID,
-		Version: req.GetVersion(),
-		Algorithm: req.GetAlgorithm(),
-		CreatedBy: createdBy,
-		Envelopes: envelopes,
+		Version:        req.GetVersion(),
+		Algorithm:      req.GetAlgorithm(),
+		CreatedBy:      createdBy,
+		Envelopes:      envelopes,
 	}
 }
 
@@ -2076,7 +2136,7 @@ type eventHub struct {
 }
 
 func newEventHub() *eventHub {
-		return &eventHub{
+	return &eventHub{
 		subscribers: make(map[string]map[chan *messengerv1.ServerEvent]string),
 	}
 }

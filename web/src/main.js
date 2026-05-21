@@ -2282,14 +2282,18 @@ async function ensureIdentityReady() {
       state.identity = await importIdentityState(JSON.parse(stored));
     } catch (error) {
       console.warn("failed to import stored identity, regenerating", error);
-      state.identity = await createIdentity(state.username);
+      state.identity = await createIdentity(state.username, state.deviceId);
     }
   } else {
-    state.identity = await createIdentity(state.username);
+    state.identity = await createIdentity(state.username, state.deviceId);
   }
 
-  if (!hasUsableDirectIdentityMaterial(state.identity)) {
-    state.identity = await createIdentity(state.username);
+  if (
+    !hasUsableDirectIdentityMaterial(state.identity)
+    || state.identity.deviceId !== state.deviceId
+    || state.identity.signedPrekey?.deviceId !== state.deviceId
+  ) {
+    state.identity = await createIdentity(state.username, state.deviceId);
   }
 
   let publishedOnServer = null;
@@ -2530,6 +2534,48 @@ async function fetchSenderIdentity(username, keyId) {
   return identity;
 }
 
+async function fetchSignedPrekeyPublic(username, keyId) {
+  if (username === state.username && keyId === state.identity?.signedPrekey?.keyId) {
+    return state.identity.signedPrekey.publicKeyBytes;
+  }
+  const bundles = await acquirePrekeyBundles(username);
+  const bundle = bundles.find((item) => item.signedPrekey?.keyId === keyId) || bundles[0];
+  if (!bundle?.signedPrekey?.publicKey?.length) {
+    throw new Error(`Не найден signed prekey ${keyId} для ${username}`);
+  }
+  return bundle.signedPrekey.publicKey;
+}
+
+async function fetchGroupEnvelopeTargets(usernames) {
+  const targets = [];
+  for (const username of [...new Set(usernames.filter(Boolean))]) {
+    if (username === state.username) {
+      targets.push({
+        username,
+        deviceId: state.deviceId,
+        keyId: state.identity.signedPrekey.keyId,
+        signedPrekeyPublicBytes: state.identity.signedPrekey.publicKeyBytes,
+      });
+      continue;
+    }
+    const bundles = await acquirePrekeyBundles(username);
+    for (const bundle of bundles) {
+      if (bundle?.signedPrekey?.publicKey?.length) {
+        targets.push({
+          username: bundle.username,
+          deviceId: bundle.deviceId,
+          keyId: bundle.signedPrekey.keyId,
+          signedPrekeyPublicBytes: bundle.signedPrekey.publicKey,
+        });
+      }
+    }
+  }
+  if (targets.length === 0) {
+    throw new Error("У участников группы нет опубликованных X25519 prekey.");
+  }
+  return targets;
+}
+
 function findIdentityByKeyId(username, keyId) {
   for (const item of state.identityKeys.values()) {
     if (item.username === username && item.keyId === keyId) {
@@ -2675,8 +2721,13 @@ async function buildDirectEnvelopes(plaintext) {
       recipientSignedPrekeyPublic: encrypted.recipientSignedPrekeyPublic,
       recipientOneTimePrekeyId: encrypted.recipientOneTimePrekeyId || "",
       recipientOneTimePrekeyPublic: encrypted.recipientOneTimePrekeyPublic || new Uint8Array(),
+      e2eeAlgorithm: encrypted.e2eeAlgorithm,
+      ratchetPublicKey: encrypted.ratchetPublicKey,
+      previousChainLength: encrypted.previousChainLength,
+      messageNumber: encrypted.messageNumber,
     });
   }
+  await persistIdentityState();
   return envelopes;
 }
 
@@ -2691,8 +2742,8 @@ async function loadConversationKey(conversationId, version) {
   if (!envelope) {
     throw new Error("group key envelope not found");
   }
-  const senderIdentity = await fetchSenderIdentity(keyPackage.createdBy, envelope.senderKeyId);
-  const groupKeyBytes = await decryptGroupKeyEnvelope(envelope, state.identity, senderIdentity.publicKey);
+  const senderSignedPrekeyPublic = await fetchSignedPrekeyPublic(keyPackage.createdBy, envelope.senderKeyId);
+  const groupKeyBytes = await decryptGroupKeyEnvelope(envelope, state.identity, senderSignedPrekeyPublic);
   rememberConversationKey(conversationId, version, groupKeyBytes);
   return groupKeyBytes;
 }
@@ -2707,8 +2758,8 @@ async function loadLatestConversationKey(conversationId) {
   if (!envelope) {
     throw new Error("latest group key envelope not found");
   }
-  const senderIdentity = await fetchSenderIdentity(keyPackage.createdBy, envelope.senderKeyId);
-  const groupKeyBytes = await decryptGroupKeyEnvelope(envelope, state.identity, senderIdentity.publicKey);
+  const senderSignedPrekeyPublic = await fetchSignedPrekeyPublic(keyPackage.createdBy, envelope.senderKeyId);
+  const groupKeyBytes = await decryptGroupKeyEnvelope(envelope, state.identity, senderSignedPrekeyPublic);
   rememberConversationKey(conversationId, keyPackage.version, groupKeyBytes);
   return { version: keyPackage.version, groupKeyBytes };
 }
@@ -2717,7 +2768,7 @@ async function rotateConversationKey(conversation, version) {
   const members = conversation.members?.length
     ? conversation.members.map((member) => member.username)
     : (conversation.memberUsernames || []);
-  const identities = await fetchIdentityKeys(members);
+  const identities = await fetchGroupEnvelopeTargets(members);
   const packageData = await createGroupKeyPackage(
     conversation.conversationId,
     version,
@@ -2726,7 +2777,7 @@ async function rotateConversationKey(conversation, version) {
       username: identity.username,
       deviceId: identity.deviceId,
       keyId: identity.keyId,
-      publicKeyBytes: identity.publicKey,
+      signedPrekeyPublicBytes: identity.signedPrekeyPublicBytes,
     })),
   );
   await userClient.upsertConversationKey({
@@ -2741,7 +2792,7 @@ async function rotateConversationKey(conversation, version) {
 }
 
 async function buildNextGroupKeyUpdate(conversationId, version, members) {
-  const identities = await fetchIdentityKeys(members);
+  const identities = await fetchGroupEnvelopeTargets(members);
   const packageData = await createGroupKeyPackage(
     conversationId,
     version,
@@ -2750,7 +2801,7 @@ async function buildNextGroupKeyUpdate(conversationId, version, members) {
       username: identity.username,
       deviceId: identity.deviceId,
       keyId: identity.keyId,
-      publicKeyBytes: identity.publicKey,
+      signedPrekeyPublicBytes: identity.signedPrekeyPublicBytes,
     })),
   );
   return {
@@ -2855,10 +2906,15 @@ async function encryptOutgoingAttachmentDescriptorsForDirect(attachments) {
           recipientSignedPrekeyPublic: encryptedDescriptor.recipientSignedPrekeyPublic,
           recipientOneTimePrekeyId: encryptedDescriptor.recipientOneTimePrekeyId || "",
           recipientOneTimePrekeyPublic: encryptedDescriptor.recipientOneTimePrekeyPublic || new Uint8Array(),
+          e2eeAlgorithm: encryptedDescriptor.e2eeAlgorithm,
+          ratchetPublicKey: encryptedDescriptor.ratchetPublicKey,
+          previousChainLength: encryptedDescriptor.previousChainLength,
+          messageNumber: encryptedDescriptor.messageNumber,
         };
       })),
     });
   }
+  await persistIdentityState();
   return out;
 }
 
@@ -2900,6 +2956,7 @@ function attachmentKindToProtoValue(kind) {
 async function materializeMessage(message) {
   let text = message?.text || "";
   let decryptionError = false;
+  let directIdentityChanged = false;
   if (!message?.encrypted) {
     const attachments = await Promise.all((message.attachments || []).map((item) => materializeAttachment(message, item)));
     return { ...message, attachments };
@@ -2912,10 +2969,15 @@ async function materializeMessage(message) {
         text = await decryptGroupMessage(message, groupKeyBytes);
       } else if (shouldDecryptDirectAsSender({ message, username: state.username, identity: state.identity })) {
         text = await decryptDirectMessageForSender(message, state.identity);
+        directIdentityChanged = true;
       } else {
         const senderIdentity = await fetchSenderIdentity(message.from, message.senderKeyId);
         text = await decryptDirectMessageForRecipient(message, state.identity, senderIdentity.publicKey);
+        directIdentityChanged = true;
       }
+    }
+    if (directIdentityChanged) {
+      await persistIdentityState();
     }
   } catch (error) {
     console.error(error);
@@ -2950,14 +3012,26 @@ async function materializeAttachment(message, attachment) {
           nonce: attachment.descriptorNonce,
           recipientSignedPrekeyPublic: message.recipientSignedPrekeyPublic,
           recipientOneTimePrekeyPublic: message.recipientOneTimePrekeyPublic,
+          e2eeAlgorithm: message.e2eeAlgorithm,
+          ratchetPublicKey: message.ratchetPublicKey,
+          previousChainLength: message.previousChainLength,
+          messageNumber: message.messageNumber,
         }, state.identity);
+        await persistIdentityState();
       } else {
         const senderIdentity = await fetchSenderIdentity(message.from, message.senderKeyId);
         descriptorText = await decryptDirectMessageForRecipient({
           ciphertext: attachment.encryptedDescriptor,
           nonce: attachment.descriptorNonce,
           recipientOneTimePrekeyId: message.recipientOneTimePrekeyId,
+          from: message.from,
+          senderDeviceId: message.senderDeviceId,
+          e2eeAlgorithm: message.e2eeAlgorithm,
+          ratchetPublicKey: message.ratchetPublicKey,
+          previousChainLength: message.previousChainLength,
+          messageNumber: message.messageNumber,
         }, state.identity, senderIdentity.publicKey);
+        await persistIdentityState();
       }
       descriptor = deserializeMediaDescriptor(new TextEncoder().encode(descriptorText));
     }

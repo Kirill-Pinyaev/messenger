@@ -171,4 +171,34 @@ public interface MessageOrBuilder extends
    */
   com.google.protobuf.ByteString
       getSenderDeviceIdBytes();
+
+  /**
+   * <code>string e2ee_algorithm = 18;</code>
+   * @return The e2eeAlgorithm.
+   */
+  java.lang.String getE2EeAlgorithm();
+  /**
+   * <code>string e2ee_algorithm = 18;</code>
+   * @return The bytes for e2eeAlgorithm.
+   */
+  com.google.protobuf.ByteString
+      getE2EeAlgorithmBytes();
+
+  /**
+   * <code>bytes ratchet_public_key = 19;</code>
+   * @return The ratchetPublicKey.
+   */
+  com.google.protobuf.ByteString getRatchetPublicKey();
+
+  /**
+   * <code>int32 previous_chain_length = 20;</code>
+   * @return The previousChainLength.
+   */
+  int getPreviousChainLength();
+
+  /**
+   * <code>int32 message_number = 21;</code>
+   * @return The messageNumber.
+   */
+  int getMessageNumber();
 }

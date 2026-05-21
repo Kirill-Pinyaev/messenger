@@ -380,6 +380,74 @@ public object MessageKt {
     public fun clearSenderDeviceId() {
       _builder.clearSenderDeviceId()
     }
+
+    /**
+     * `string e2ee_algorithm = 18;`
+     */
+    public var e2EeAlgorithm: kotlin.String
+      @kotlin.jvm.JvmName("getE2EeAlgorithm")
+        get() = _builder.e2EeAlgorithm
+      @kotlin.jvm.JvmName("setE2EeAlgorithm")
+        set(value) {
+        _builder.e2EeAlgorithm = value
+      }
+    /**
+     * `string e2ee_algorithm = 18;`
+     */
+    public fun clearE2EeAlgorithm() {
+      _builder.clearE2EeAlgorithm()
+    }
+
+    /**
+     * <code>bytes ratchet_public_key = 19;</code>
+     */
+    public var ratchetPublicKey: com.google.protobuf.ByteString
+      @kotlin.jvm.JvmName("getRatchetPublicKey")
+        get() = _builder.ratchetPublicKey
+      @kotlin.jvm.JvmName("setRatchetPublicKey")
+        set(value) {
+        _builder.ratchetPublicKey = value
+      }
+    /**
+     * `bytes ratchet_public_key = 19;`
+     */
+    public fun clearRatchetPublicKey() {
+      _builder.clearRatchetPublicKey()
+    }
+
+    /**
+     * <code>int32 previous_chain_length = 20;</code>
+     */
+    public var previousChainLength: kotlin.Int
+      @kotlin.jvm.JvmName("getPreviousChainLength")
+        get() = _builder.previousChainLength
+      @kotlin.jvm.JvmName("setPreviousChainLength")
+        set(value) {
+        _builder.previousChainLength = value
+      }
+    /**
+     * `int32 previous_chain_length = 20;`
+     */
+    public fun clearPreviousChainLength() {
+      _builder.clearPreviousChainLength()
+    }
+
+    /**
+     * <code>int32 message_number = 21;</code>
+     */
+    public var messageNumber: kotlin.Int
+      @kotlin.jvm.JvmName("getMessageNumber")
+        get() = _builder.messageNumber
+      @kotlin.jvm.JvmName("setMessageNumber")
+        set(value) {
+        _builder.messageNumber = value
+      }
+    /**
+     * `int32 message_number = 21;`
+     */
+    public fun clearMessageNumber() {
+      _builder.clearMessageNumber()
+    }
   }
 }
 public inline fun com.example.messenger.proto.Message.copy(block: `com.example.messenger.proto`.MessageKt.Dsl.() -> kotlin.Unit): com.example.messenger.proto.Message =

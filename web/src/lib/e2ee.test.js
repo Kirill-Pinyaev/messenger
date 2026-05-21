@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import {
@@ -20,17 +20,7 @@ import {
 test("direct E2EE with prekey bundle decrypts for recipient", async () => {
   const alice = await createIdentity("alice");
   const bob = await createIdentity("bob");
-  const bundle = {
-    username: "bob",
-    signedPrekey: {
-      keyId: bob.signedPrekey.keyId,
-      publicKey: bob.signedPrekey.publicKeyBytes,
-    },
-    oneTimePrekey: {
-      keyId: bob.oneTimePrekeys[0].keyId,
-      publicKey: bob.oneTimePrekeys[0].publicKeyBytes,
-    },
-  };
+  const bundle = bob.toPrekeyBundle();
 
   const encrypted = await encryptDirectMessage("hello encrypted", alice, bundle);
   const decrypted = await decryptDirectMessageForRecipient(encrypted, bob, alice.publicKeyBytes);
@@ -38,23 +28,22 @@ test("direct E2EE with prekey bundle decrypts for recipient", async () => {
   assert.equal(decrypted, "hello encrypted");
   assert.equal(encrypted.senderKeyId, alice.keyId);
   assert.equal(encrypted.recipientSignedPrekeyId, bob.signedPrekey.keyId);
-  assert.equal(encrypted.recipientOneTimePrekeyId, bob.oneTimePrekeys[0].keyId);
+  assert.equal(encrypted.e2eeAlgorithm, "DR-X25519-HKDF-SHA256-AESGCM-Ed25519-v1");
+});
+
+test("created v2 identity binds signed prekey signature to explicit device id", async () => {
+  const alice = await createIdentity("alice", "web-fixed");
+  const bundle = alice.toPrekeyBundle();
+
+  assert.equal(alice.deviceId, "web-fixed");
+  assert.equal(bundle.deviceId, "web-fixed");
+  assert.equal(bundle.signedPrekey.deviceId, "web-fixed");
 });
 
 test("direct E2EE lets sender decrypt its own outbound message", async () => {
   const alice = await createIdentity("alice");
   const bob = await createIdentity("bob");
-  const bundle = {
-    username: "bob",
-    signedPrekey: {
-      keyId: bob.signedPrekey.keyId,
-      publicKey: bob.signedPrekey.publicKeyBytes,
-    },
-    oneTimePrekey: {
-      keyId: bob.oneTimePrekeys[0].keyId,
-      publicKey: bob.oneTimePrekeys[0].publicKeyBytes,
-    },
-  };
+  const bundle = bob.toPrekeyBundle();
 
   const encrypted = await encryptDirectMessage("self-view", alice, bundle);
   const decryptedBySender = await decryptDirectMessageForSender(encrypted, alice);
@@ -67,14 +56,14 @@ test("group key package encrypts a shared key for every member", async () => {
   const bob = await createIdentity("bob");
 
   const pkg = await createGroupKeyPackage("group-1", 1, alice, [
-    { username: "alice", keyId: alice.keyId, publicKeyBytes: alice.publicKeyBytes },
-    { username: "bob", keyId: bob.keyId, publicKeyBytes: bob.publicKeyBytes },
+    { username: "alice", keyId: alice.signedPrekey.keyId, signedPrekeyPublicBytes: alice.signedPrekey.publicKeyBytes },
+    { username: "bob", keyId: bob.signedPrekey.keyId, signedPrekeyPublicBytes: bob.signedPrekey.publicKeyBytes },
   ]);
 
   assert.equal(pkg.version, 1);
   assert.equal(pkg.envelopes.length, 2);
 
-  const bobGroupKey = await decryptGroupKeyEnvelope(pkg.envelopes[1], bob, alice.publicKeyBytes);
+  const bobGroupKey = await decryptGroupKeyEnvelope(pkg.envelopes[1], bob, alice.signedPrekey.publicKeyBytes);
   const encrypted = await encryptGroupMessage("secret group", bobGroupKey, pkg.version);
   const decrypted = await decryptGroupMessage(encrypted, bobGroupKey);
 
@@ -85,17 +74,7 @@ test("identity state can be exported and imported back with prekeys", async () =
   const alice = await createIdentity("alice");
   const exported = await exportIdentityState(alice);
   const restored = await importIdentityState(exported);
-  const bundle = {
-    username: "alice",
-    signedPrekey: {
-      keyId: restored.signedPrekey.keyId,
-      publicKey: restored.signedPrekey.publicKeyBytes,
-    },
-    oneTimePrekey: {
-      keyId: restored.oneTimePrekeys[0].keyId,
-      publicKey: restored.oneTimePrekeys[0].publicKeyBytes,
-    },
-  };
+  const bundle = restored.toPrekeyBundle();
 
   const encrypted = await encryptDirectMessage("persisted", alice, bundle);
   const decrypted = await decryptDirectMessageForRecipient(encrypted, restored, alice.publicKeyBytes);
@@ -113,17 +92,7 @@ test("identity state export/import works without Buffer global", async () => {
     globalThis.Buffer = undefined;
     const exported = await exportIdentityState(alice);
     const restored = await importIdentityState(exported);
-    const bundle = {
-      username: "alice",
-      signedPrekey: {
-        keyId: restored.signedPrekey.keyId,
-        publicKey: restored.signedPrekey.publicKeyBytes,
-      },
-      oneTimePrekey: {
-        keyId: restored.oneTimePrekeys[0].keyId,
-        publicKey: restored.oneTimePrekeys[0].publicKeyBytes,
-      },
-    };
+    const bundle = restored.toPrekeyBundle();
 
     const encrypted = await encryptDirectMessage("browser-safe", alice, bundle);
     const decrypted = await decryptDirectMessageForRecipient(encrypted, restored, alice.publicKeyBytes);
@@ -135,14 +104,14 @@ test("identity state export/import works without Buffer global", async () => {
   }
 });
 
-test("publish bundle builder exposes only unpublished one-time prekeys", async () => {
+test("publish bundle builder exposes signed prekey signature", async () => {
   const alice = await createIdentity("alice");
-  alice.oneTimePrekeys[0].published = true;
 
   const payload = buildPublishPrekeyBundle(alice);
 
   assert.equal(payload.signedPrekeyId, alice.signedPrekey.keyId);
-  assert.equal(payload.oneTimePrekeys.length, alice.oneTimePrekeys.length - 1);
+  assert.deepEqual(Array.from(payload.signedPrekeySignature), Array.from(alice.signedPrekey.signature));
+  assert.equal(payload.oneTimePrekeys.length, 0);
 });
 
 test("markPrekeysAsPublished updates signed and one-time prekeys", async () => {
@@ -154,11 +123,11 @@ test("markPrekeysAsPublished updates signed and one-time prekeys", async () => {
   assert.equal(published.oneTimePrekeys.every((item) => item.published === true), true);
 });
 
-test("topUpOneTimePrekeys replenishes unpublished pool", async () => {
+test("topUpOneTimePrekeys is a no-op for v2 ratchet identities", async () => {
   const alice = await createIdentity("alice");
   alice.oneTimePrekeys = [];
 
   const toppedUp = await topUpOneTimePrekeys(alice, 3);
 
-  assert.equal(toppedUp.oneTimePrekeys.length, 3);
+  assert.equal(toppedUp.oneTimePrekeys.length, 0);
 });

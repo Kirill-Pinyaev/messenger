@@ -1,6 +1,6 @@
 # Messenger — контекст проекта для ИИ-агентов
 
-_Последнее обновление: 2026-04-26 (archive bootstrap/server reconciliation исправлен для Web/Android, Web backfill читаемой истории в archive добавлен, Android restore старой истории подключён, proto стабы регенерированы)_
+_Последнее обновление: 2026-05-21 (Web Double Ratchet decrypt сделан атомарным, ratchet state сохраняется после direct encrypt/decrypt)_
 
 ## Общее
 
@@ -41,7 +41,8 @@ messenger/                          ← Go-бэкенд + Web (этот репо
 │       ├── api.js
 │       ├── auth-ui.js
 │       ├── chat-state.js
-│       ├── e2ee.js              — WebCrypto helper-ы
+│       ├── double-ratchet.js    — X25519 Double Ratchet + Ed25519/SPK
+│       ├── e2ee.js              — E2EE facade + group/media helpers
 │       ├── media-e2ee.js        — AES-GCM для media blobs + descriptor format
 │       ├── group-editor.js
 │       └── group-permissions.js
@@ -53,7 +54,8 @@ messenger/                          ← Go-бэкенд + Web (этот репо
 │   ├── App.kt                   — Application, lazy-init grpc/stores/eventService/archiveStore
 │   ├── MainActivity.kt
 │   ├── crypto/
-│   │   ├── E2EE.kt              — P-256 ECDH, HKDF-SHA256, AES-GCM
+│   │   ├── DoubleRatchet.kt     — X25519 Double Ratchet + Ed25519/SPK
+│   │   ├── E2EE.kt              — legacy/group/media AES-GCM helpers
 │   │   ├── IdentityStore.kt     — DataStore-персистентность ключей
 │   │   ├── ArchiveE2EE.kt       — PBKDF2 password wrap/unwrap, ECIES для архива
 │   │   └── ArchiveStore.kt      — DataStore-персистентность archive identity
@@ -106,6 +108,11 @@ messenger/                          ← Go-бэкенд + Web (этот репо
   - `recipient_signed_prekey_public`
   - `recipient_one_time_prekey_id`
   - `recipient_one_time_prekey_public`
+  - `e2ee_algorithm`
+  - `ratchet_public_key`
+  - `previous_chain_length`
+  - `message_number`
+- `SignedPrekey` / `PublishPrekeyBundleRequest` содержат `signature` / `signed_prekey_signature` и `signature_algorithm = "Ed25519"` для подписи X25519 SPK;
 - media/attachment RPC и модели:
   - `PrepareMediaUpload`
   - `UploadMedia`
@@ -278,7 +285,7 @@ type Message struct {
 
 ```js
 {
-  identity,        // локальная identity key pair + signed prekey + one-time prekeys текущего пользователя
+  identity,        // локальная Ed25519 identity + signed X25519 prekey + ratchet sessions
   identityKeys,    // Map<username, IdentityKey proto>
   groupKeys,       // Map<conversationId:version, Uint8Array>
   encryptionPrefs, // Map<conversationId, boolean>, локальный флаг E2EE on/off для конкретного чата
@@ -288,11 +295,14 @@ type Message struct {
 
 ### E2EE на Web
 
-`web/src/lib/e2ee.js` реализует:
-- генерацию identity key pair;
-- генерацию signed prekey и one-time prekeys;
+`web/src/lib/double-ratchet.js` и facade `web/src/lib/e2ee.js` реализуют:
+- генерацию Ed25519 identity key pair;
+- генерацию X25519 signed prekey;
+- Ed25519-подпись SPK по canonical bytes `messenger-spk-v1 || username || deviceId || spkKeyId || spkPublicKey`;
+- проверку SPK подписи перед direct encryption;
+- X25519 Double Ratchet для direct messages (`DR-X25519-HKDF-SHA256-AESGCM-Ed25519-v1`);
 - экспорт/импорт identity state;
-- direct encryption/decryption через recipient prekey bundle;
+- direct encryption/decryption через recipient prekey bundle + ratchet metadata;
 - group key package generation;
 - envelope decryption;
 - group message encryption/decryption;
@@ -300,14 +310,18 @@ type Message struct {
 
 Текущая схема:
 - direct chats:
-  - Web публикует identity public key через `PublishIdentityKey`;
-  - Web публикует signed prekey + one-time prekeys через `PublishPrekeyBundle`;
+  - Web публикует Ed25519 identity public key через `PublishIdentityKey`;
+  - Web публикует X25519 signed prekey + Ed25519 signature через `PublishPrekeyBundle`;
   - direct login/session теперь device-aware: каждый клиент логинится со своим `device_id`;
   - Web хранит локальную identity в `localStorage` по ключу `(username, device_id)`, а не только по `username`; legacy username-only storage мигрируется и при битом/неполном состоянии ключи регенерируются;
+  - Web v2 identity обязательно генерируется с текущим `state.deviceId`; если импортированный localStorage identity или его signed prekey привязан к другому/пустому `deviceId`, клиент регенерирует identity перед публикацией, иначе Ed25519 SPK signature не пройдёт проверку при отправке;
+  - `hasUsableDirectIdentityMaterial()` должен принимать v2 Ed25519/X25519 поля (`privateKeyBytes`, `signedPrekey.privateKeyBytes`, `signedPrekey.signature`); если проверять только legacy P-256/JWK поля, Web будет регенерировать ключи при входе и потеряет private SPK для уже полученных direct messages;
   - отправитель получает bundles получателя через `AcquirePrekeyBundles`;
   - direct message кодируется как набор `DirectMessageEnvelope`, по одному на устройство получателя и по одному на дополнительные устройства отправителя;
   - в каждом direct message сервер сохраняет `sender_device_id`; это нужно, чтобы новое устройство того же аккаунта не пыталось дешифровать старую sender-copy, отправленную другим девайсом;
-  - plaintext шифруется на клиенте на базе recipient signed/one-time prekeys;
+  - plaintext шифруется на клиенте через Double Ratchet message key; сервер получает только ciphertext и ratchet metadata;
+  - Double Ratchet receiving state коммитится только после успешного AES-GCM decrypt; иначе одна битая/устаревшая попытка расшифровки сдвигает receiving chain и ломает повторную расшифровку;
+  - Web обязан сохранять identity/ratchet state в `localStorage` после успешного direct encrypt/decrypt, включая attachment descriptor decrypt/encrypt;
   - сервер хранит multi-device envelopes сериализованно и при `GetMessages`/`StreamEvents` проектирует сообщение под конкретный `(username, device_id)`;
   - для текущего отправляющего Web-устройства отдельный self-envelope не обязателен: если точного `(from, device_id)` envelope нет, сервер может отдать sender-copy через recipient-envelope;
   - если новое устройство открывает старую direct-историю, где на него никогда не шифровались envelopes, `GetMessages` не должен падать с `INTERNAL`; сервер отдаёт placeholder `[Сообщение недоступно на этом устройстве]`;
@@ -315,7 +329,7 @@ type Message struct {
   - сервер получает только ciphertext.
 - group chats:
   - клиент-инициатор генерирует симметричный group key;
-  - для каждого участника создаётся envelope;
+  - для каждого участника создаётся envelope через X25519 signed prekey material;
   - при create/add/remove/leave новый `GroupKeyUpdate` передаётся прямо в membership RPC;
   - сервер фиксирует membership change и новую версию group key в одном действии;
   - сообщения в группе шифруются group key и несут `conversation_key_version`.
@@ -394,25 +408,25 @@ type Message struct {
 
 ### E2EE на Android
 
-`crypto/E2EE.kt` реализует на Android JCE:
-- `generateKeyPair()` — P-256 через `KeyPairGenerator("EC")`
-- `exportPublicKey()` — 65-байтовый raw uncompressed point (0x04 || X || Y)
-- `importPublicKey()` — добавляет X.509 SubjectPublicKeyInfo header для P-256
-- `exportPrivateKey()` / `importPrivateKey()` — PKCS8 encoding
-- `ecdh()` — **ВАЖНО**: output всегда дополняется до 32 байт (left-pad), потому что WebCrypto `deriveBits(..., 256)` всегда возвращает ровно 32 байта, а JVM `generateSecret()` может вернуть меньше при ведущих нулях x-координаты
-- `hkdf()` — RFC 5869 HKDF-SHA256, salt = 32 нулевых байта (совпадает с Web)
-- `aesGcmEncrypt()` / `aesGcmDecrypt()` — AES-256-GCM, 12-байтовый nonce, 128-битный тег
-- `encryptMedia()` / `decryptMedia()` — AES-GCM для вложений + hash verification по descriptor JSON
+`crypto/DoubleRatchet.kt` реализует на Android через Bouncy Castle:
+- Ed25519 identity key + подпись X25519 signed prekey;
+- проверку SPK signature;
+- X25519 Double Ratchet с HKDF-SHA256 и AES-256-GCM;
+- export/import ratchet identity для unit-тестируемой state persistence.
+
+`crypto/E2EE.kt` остаётся для AES-GCM media/group helper-ов и legacy P-256 функций, которые больше не используются как direct E2EE v2 contract.
 
 `crypto/IdentityStore.kt`:
 - хранит identity state в DataStore как JSON (Base64-encoded key bytes)
 - identity привязана к конкретному `deviceId`
-- на одно Android-устройство хранится 1 identity key pair, 1 signed prekey, 10 one-time prekeys
+- на одно Android-устройство хранится 1 Ed25519 identity key pair и 1 X25519 signed prekey с Ed25519 signature
 
 Ключевое правило совместимости Web ↔ Android:
-- Все public key bytes — 65-байтовый raw uncompressed P-256 point
-- HKDF salt = 32 нулевых байта, info = `"messenger-direct-prekey-v1"` или `"messenger-group-envelope-v1"`
-- ECDH output всегда 32 байта (дополняем left-pad если нужно)
+- direct E2EE v2 использует `DR-X25519-HKDF-SHA256-AESGCM-Ed25519-v1`;
+- identity public key bytes — Ed25519 public key;
+- signed prekey public key bytes и ratchet public key bytes — X25519 public key;
+- SPK signature algorithm — `Ed25519`;
+- старые direct P-256 сообщения/ключи несовместимы с v2 и не мигрируются.
 
 ### Подключение к серверу
 
@@ -504,6 +518,7 @@ Gradle sync и сборка через Android Studio (compileSdk 36, minSdk 24)
 - `internal/store` — memory tests;
 - `internal/store` с тегом `integration` — PostgreSQL + testcontainers;
 - `web/src/lib/*.test.js` — unit tests для чистых helper-модулей, включая `e2ee.js`.
+- `messenger/app/src/test/java/com/example/messenger/crypto/DoubleRatchetTest.kt` — Android unit tests для Ed25519/SPK и Double Ratchet.
 
 Критическое правило проекта:
 - для нового функционального кода сначала пишутся тесты, потом реализация.
@@ -511,7 +526,7 @@ Gradle sync и сборка через Android Studio (compileSdk 36, minSdk 24)
 ## Текущие ограничения
 
 - E2EE реализован как учебная модель, а не production-grade Signal-протокол.
-- Direct E2EE использует identity key + signed prekey + one-time prekeys и теперь поддерживает device-aware multi-session model через `device_id`, но всё ещё без полноценного double ratchet.
+- Direct E2EE v2 использует X25519 Double Ratchet + Ed25519/SPK и не совместим со старыми direct P-256 ciphertext/key state.
 - Multi-device direct storage пока реализован как сериализованные direct envelopes внутри server-side message payload, а не как отдельная нормализованная таблица per-device ciphertext.
 - Server-side search по encrypted сообщениям не поддерживается.
 - Android UI пока не даёт полноценного группового менеджмента как на Web, но текущий `ChatScreen` уже умеет отправлять E2EE group messages и group attachments при наличии conversation.

@@ -6,8 +6,11 @@ import com.example.messenger.proto.PrekeyBundle
 internal data class DirectBundleTarget(
     val username: String,
     val deviceId: String,
+    val identityKeyId: String,
+    val identityPublic: ByteArray,
     val signedPrekeyId: String,
     val signedPrekeyPublic: ByteArray,
+    val signedPrekeySignature: ByteArray,
     val oneTimePrekeyId: String,
     val oneTimePrekeyPublic: ByteArray?,
 )
@@ -26,8 +29,11 @@ internal fun buildDirectBundleTargets(
     fun append(
         username: String,
         deviceId: String,
+        identityKeyId: String,
+        identityPublic: ByteArray,
         signedPrekeyId: String,
         signedPrekeyPublic: ByteArray,
+        signedPrekeySignature: ByteArray,
         oneTimePrekeyId: String,
         oneTimePrekeyPublic: ByteArray?,
     ) {
@@ -36,8 +42,11 @@ internal fun buildDirectBundleTargets(
         out += DirectBundleTarget(
             username = username,
             deviceId = deviceId,
+            identityKeyId = identityKeyId,
+            identityPublic = identityPublic,
             signedPrekeyId = signedPrekeyId,
             signedPrekeyPublic = signedPrekeyPublic,
+            signedPrekeySignature = signedPrekeySignature,
             oneTimePrekeyId = oneTimePrekeyId,
             oneTimePrekeyPublic = oneTimePrekeyPublic,
         )
@@ -47,28 +56,26 @@ internal fun buildDirectBundleTargets(
         append(
             username = bundle.username,
             deviceId = bundle.deviceId,
+            identityKeyId = bundle.identityKey.keyId,
+            identityPublic = bundle.identityKey.publicKey.toByteArray(),
             signedPrekeyId = bundle.signedPrekey.keyId,
             signedPrekeyPublic = bundle.signedPrekey.publicKey.toByteArray(),
+            signedPrekeySignature = bundle.signedPrekey.signature.toByteArray(),
             oneTimePrekeyId = bundle.oneTimePrekey.keyId,
             oneTimePrekeyPublic = bundle.oneTimePrekey.publicKey.takeIf { !it.isEmpty }?.toByteArray(),
         )
     }
 
-    append(
-        username = currentUsername,
-        deviceId = currentDeviceId,
-        signedPrekeyId = localSignedPrekeyId,
-        signedPrekeyPublic = localSignedPrekeyPublic,
-        oneTimePrekeyId = "",
-        oneTimePrekeyPublic = null,
-    )
-
     ownBundles.forEach { bundle ->
+        if (bundle.username == currentUsername && bundle.deviceId == currentDeviceId) return@forEach
         append(
             username = bundle.username,
             deviceId = bundle.deviceId,
+            identityKeyId = bundle.identityKey.keyId,
+            identityPublic = bundle.identityKey.publicKey.toByteArray(),
             signedPrekeyId = bundle.signedPrekey.keyId,
             signedPrekeyPublic = bundle.signedPrekey.publicKey.toByteArray(),
+            signedPrekeySignature = bundle.signedPrekey.signature.toByteArray(),
             oneTimePrekeyId = bundle.oneTimePrekey.keyId,
             oneTimePrekeyPublic = bundle.oneTimePrekey.publicKey.takeIf { !it.isEmpty }?.toByteArray(),
         )

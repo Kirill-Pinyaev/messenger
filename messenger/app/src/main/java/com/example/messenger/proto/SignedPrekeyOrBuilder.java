@@ -73,4 +73,22 @@ public interface SignedPrekeyOrBuilder extends
    */
   com.google.protobuf.ByteString
       getDeviceIdBytes();
+
+  /**
+   * <code>bytes signature = 7;</code>
+   * @return The signature.
+   */
+  com.google.protobuf.ByteString getSignature();
+
+  /**
+   * <code>string signature_algorithm = 8;</code>
+   * @return The signatureAlgorithm.
+   */
+  java.lang.String getSignatureAlgorithm();
+  /**
+   * <code>string signature_algorithm = 8;</code>
+   * @return The bytes for signatureAlgorithm.
+   */
+  com.google.protobuf.ByteString
+      getSignatureAlgorithmBytes();
 }

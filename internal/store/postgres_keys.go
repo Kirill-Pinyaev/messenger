@@ -95,15 +95,17 @@ func (s *PostgresKeyStore) UpsertSignedPrekey(ctx context.Context, key SignedPre
 	}
 
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO signed_prekey_devices (username, device_id, key_id, algorithm, public_key)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO signed_prekey_devices (username, device_id, key_id, algorithm, public_key, signature, signature_algorithm)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (username, device_id) DO UPDATE
 		SET key_id = EXCLUDED.key_id,
 			algorithm = EXCLUDED.algorithm,
 			public_key = EXCLUDED.public_key,
+			signature = EXCLUDED.signature,
+			signature_algorithm = EXCLUDED.signature_algorithm,
 			published_at = NOW()
 		RETURNING published_at
-	`, key.Username, key.DeviceID, key.KeyID, key.Algorithm, key.PublicKey).Scan(&key.PublishedAt)
+	`, key.Username, key.DeviceID, key.KeyID, key.Algorithm, key.PublicKey, key.Signature, key.SignatureAlgorithm).Scan(&key.PublishedAt)
 	if err != nil {
 		return SignedPrekey{}, err
 	}
@@ -117,10 +119,10 @@ func (s *PostgresKeyStore) GetSignedPrekey(ctx context.Context, username, device
 
 	var key SignedPrekey
 	err := s.pool.QueryRow(ctx, `
-		SELECT username, device_id, key_id, algorithm, public_key, published_at
+		SELECT username, device_id, key_id, algorithm, public_key, signature, signature_algorithm, published_at
 		FROM signed_prekey_devices
 		WHERE username = $1 AND device_id = $2
-	`, username, deviceID).Scan(&key.Username, &key.DeviceID, &key.KeyID, &key.Algorithm, &key.PublicKey, &key.PublishedAt)
+	`, username, deviceID).Scan(&key.Username, &key.DeviceID, &key.KeyID, &key.Algorithm, &key.PublicKey, &key.Signature, &key.SignatureAlgorithm, &key.PublishedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SignedPrekey{}, ErrSignedPrekeyNotFound
@@ -202,10 +204,10 @@ func (s *PostgresKeyStore) AcquirePrekeyBundle(ctx context.Context, username, de
 	}
 
 	if err := tx.QueryRow(ctx, `
-		SELECT username, device_id, key_id, algorithm, public_key, published_at
+		SELECT username, device_id, key_id, algorithm, public_key, signature, signature_algorithm, published_at
 		FROM signed_prekey_devices
 		WHERE username = $1 AND device_id = $2
-	`, username, deviceID).Scan(&bundle.SignedPrekey.Username, &bundle.SignedPrekey.DeviceID, &bundle.SignedPrekey.KeyID, &bundle.SignedPrekey.Algorithm, &bundle.SignedPrekey.PublicKey, &bundle.SignedPrekey.PublishedAt); err != nil {
+	`, username, deviceID).Scan(&bundle.SignedPrekey.Username, &bundle.SignedPrekey.DeviceID, &bundle.SignedPrekey.KeyID, &bundle.SignedPrekey.Algorithm, &bundle.SignedPrekey.PublicKey, &bundle.SignedPrekey.Signature, &bundle.SignedPrekey.SignatureAlgorithm, &bundle.SignedPrekey.PublishedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return PrekeyBundle{}, ErrSignedPrekeyNotFound
 		}
@@ -246,7 +248,7 @@ func (s *PostgresKeyStore) AcquirePrekeyBundles(ctx context.Context, username st
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT i.username, i.device_id, i.key_id, i.algorithm, i.public_key, i.published_at,
-		       s.key_id, s.algorithm, s.public_key, s.published_at
+		       s.key_id, s.algorithm, s.public_key, s.signature, s.signature_algorithm, s.published_at
 		FROM identity_key_devices i
 		JOIN signed_prekey_devices s
 		  ON s.username = i.username AND s.device_id = i.device_id
@@ -272,6 +274,8 @@ func (s *PostgresKeyStore) AcquirePrekeyBundles(ctx context.Context, username st
 			&bundle.SignedPrekey.KeyID,
 			&bundle.SignedPrekey.Algorithm,
 			&bundle.SignedPrekey.PublicKey,
+			&bundle.SignedPrekey.Signature,
+			&bundle.SignedPrekey.SignatureAlgorithm,
 			&bundle.SignedPrekey.PublishedAt,
 		); err != nil {
 			return nil, err
@@ -424,6 +428,8 @@ func (s *PostgresKeyStore) initSchema(ctx context.Context) error {
 			key_id TEXT NOT NULL,
 			algorithm TEXT NOT NULL,
 			public_key BYTEA NOT NULL,
+			signature BYTEA NOT NULL DEFAULT ''::bytea,
+			signature_algorithm TEXT NOT NULL DEFAULT '',
 			published_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (username, device_id)
 		);
@@ -465,6 +471,8 @@ func (s *PostgresKeyStore) initSchema(ctx context.Context) error {
 			recipient_key_id TEXT NOT NULL,
 			PRIMARY KEY (conversation_id, version, username, device_id)
 		);
+		ALTER TABLE signed_prekey_devices ADD COLUMN IF NOT EXISTS signature BYTEA NOT NULL DEFAULT ''::bytea;
+		ALTER TABLE signed_prekey_devices ADD COLUMN IF NOT EXISTS signature_algorithm TEXT NOT NULL DEFAULT '';
 	`)
 	return err
 }

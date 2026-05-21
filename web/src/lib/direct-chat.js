@@ -48,17 +48,29 @@ export function currentDevicePrekeyBundle({ username, deviceId, identity }) {
   return {
     username,
     deviceId,
+    identityKey: {
+      username,
+      deviceId,
+      keyId: identity.keyId,
+      algorithm: identity.algorithm,
+      publicKey: identity.publicKeyBytes,
+    },
     signedPrekey: {
       keyId: identity.signedPrekey.keyId,
+      algorithm: identity.signedPrekey.algorithm,
       publicKey: identity.signedPrekey.publicKeyBytes,
       publicKeyBytes: identity.signedPrekey.publicKeyBytes,
+      signature: identity.signedPrekey.signature,
+      signatureAlgorithm: identity.signedPrekey.signatureAlgorithm,
     },
   };
 }
 
 export function hasDirectBundleMaterial(bundle) {
   const signedPublicKey = bundle?.signedPrekey?.publicKey || bundle?.signedPrekey?.publicKeyBytes;
-  return !!(signedPublicKey && signedPublicKey.length > 0);
+  const signature = bundle?.signedPrekey?.signature;
+  const identityPublicKey = bundle?.identityKey?.publicKey || bundle?.identityKey?.publicKeyBytes || bundle?.identityPublicKey;
+  return !!(signedPublicKey && signedPublicKey.length > 0 && signature && signature.length > 0 && identityPublicKey && identityPublicKey.length > 0);
 }
 
 export function shouldDecryptDirectAsSender({ message, username, identity }) {

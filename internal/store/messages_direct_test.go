@@ -24,18 +24,18 @@ func TestMemoryMessageStoreSaveAndLoadDirectEnvelopes(t *testing.T) {
 		t.Fatalf("PrepareMedia() error = %v", err)
 	}
 	if _, err := store.CompleteMedia(ctx, MediaObject{
-		MediaID:         "media-1",
-		OwnerUsername:   "alice",
-		StorageKey:      "media-1.bin",
-		Filename:        "photo.png",
-		MimeType:        "image/png",
-		Kind:            AttachmentKindImage,
-		SizeBytes:       128,
-		CiphertextSize:  160,
-		Nonce:           []byte{1, 2, 3},
-		SHA256:          []byte{4, 5, 6},
-		Uploaded:        true,
-		UploadedAt:      time.Now().UTC(),
+		MediaID:        "media-1",
+		OwnerUsername:  "alice",
+		StorageKey:     "media-1.bin",
+		Filename:       "photo.png",
+		MimeType:       "image/png",
+		Kind:           AttachmentKindImage,
+		SizeBytes:      128,
+		CiphertextSize: 160,
+		Nonce:          []byte{1, 2, 3},
+		SHA256:         []byte{4, 5, 6},
+		Uploaded:       true,
+		UploadedAt:     time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("CompleteMedia() error = %v", err)
 	}
@@ -57,25 +57,29 @@ func TestMemoryMessageStoreSaveAndLoadDirectEnvelopes(t *testing.T) {
 				RecipientSignedPrekeyPublic: []byte{3, 3, 3},
 			},
 			{
-				TargetUsername:              "bob",
-				TargetDeviceID:              "bob-phone",
-				Ciphertext:                  []byte{4, 4, 4},
-				Nonce:                       []byte{5, 5, 5},
-				RecipientSignedPrekeyID:     "bob-spk",
-				RecipientSignedPrekeyPublic: []byte{6, 6, 6},
-				RecipientOneTimePrekeyID:    "bob-otp",
+				TargetUsername:               "bob",
+				TargetDeviceID:               "bob-phone",
+				Ciphertext:                   []byte{4, 4, 4},
+				Nonce:                        []byte{5, 5, 5},
+				RecipientSignedPrekeyID:      "bob-spk",
+				RecipientSignedPrekeyPublic:  []byte{6, 6, 6},
+				RecipientOneTimePrekeyID:     "bob-otp",
 				RecipientOneTimePrekeyPublic: []byte{7, 7, 7},
+				E2EEAlgorithm:                "DR-X25519-HKDF-SHA256-AESGCM-Ed25519-v1",
+				RatchetPublicKey:             []byte{8, 7, 6},
+				PreviousChainLength:          2,
+				MessageNumber:                3,
 			},
 		},
 		Attachments: []Attachment{
 			{
-				AttachmentID: "att-1",
-				Kind:         AttachmentKindImage,
-				Filename:     "photo.png",
-				MimeType:     "image/png",
-				SizeBytes:    128,
-				MediaID:      "media-1",
-				SHA256:       []byte{8, 8, 8},
+				AttachmentID:   "att-1",
+				Kind:           AttachmentKindImage,
+				Filename:       "photo.png",
+				MimeType:       "image/png",
+				SizeBytes:      128,
+				MediaID:        "media-1",
+				SHA256:         []byte{8, 8, 8},
 				CiphertextSize: 160,
 				DirectEnvelopes: []AttachmentDirectEnvelope{
 					{
@@ -106,6 +110,13 @@ func TestMemoryMessageStoreSaveAndLoadDirectEnvelopes(t *testing.T) {
 	}
 	if history[0].ID != saved.ID {
 		t.Fatalf("History().ID = %d, want %d", history[0].ID, saved.ID)
+	}
+	bobEnvelope := history[0].DirectEnvelopes[1]
+	if bobEnvelope.E2EEAlgorithm != "DR-X25519-HKDF-SHA256-AESGCM-Ed25519-v1" ||
+		string(bobEnvelope.RatchetPublicKey) != string([]byte{8, 7, 6}) ||
+		bobEnvelope.PreviousChainLength != 2 ||
+		bobEnvelope.MessageNumber != 3 {
+		t.Fatalf("ratchet metadata was not persisted: %+v", bobEnvelope)
 	}
 }
 

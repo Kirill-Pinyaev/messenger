@@ -150,18 +150,21 @@ class MessengerRepository(private val grpc: GrpcManager, private val token: Stri
     suspend fun publishIdentityKey(keyId: String, publicKeyBytes: ByteArray): IdentityKey =
         grpc.userStub(token).publishIdentityKey(publishIdentityKeyRequest {
             this.keyId = keyId
-            algorithm = "P256-HKDF-AESGCM"
+            algorithm = "Ed25519"
             publicKey = ByteString.copyFrom(publicKeyBytes)
         })
 
     suspend fun publishPrekeyBundle(
         spkId: String,
         spkPub: ByteArray,
+        spkSignature: ByteArray,
         otps: List<Pair<String, ByteArray>>
     ): PrekeyBundle = grpc.userStub(token).publishPrekeyBundle(publishPrekeyBundleRequest {
         signedPrekeyId = spkId
-        signedPrekeyAlgorithm = "P256-HKDF-AESGCM"
+        signedPrekeyAlgorithm = "X25519"
         signedPrekeyPublicKey = ByteString.copyFrom(spkPub)
+        signedPrekeySignature = ByteString.copyFrom(spkSignature)
+        signedPrekeySignatureAlgorithm = "Ed25519"
         oneTimePrekeys.addAll(otps.map { (id, pub) ->
             OneTimePrekeyUpload.newBuilder()
                 .setKeyId(id)

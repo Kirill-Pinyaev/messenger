@@ -121,6 +121,8 @@ message SignedPrekey {
   bytes public_key = 4;
   google.protobuf.Timestamp published_at = 5;
   string device_id = 6;
+  bytes signature = 7;
+  string signature_algorithm = 8;
 }
 
 message OneTimePrekey {
@@ -226,6 +228,8 @@ message PublishPrekeyBundleRequest {
   string signed_prekey_algorithm = 2;
   bytes signed_prekey_public_key = 3;
   repeated OneTimePrekeyUpload one_time_prekeys = 4;
+  bytes signed_prekey_signature = 5;
+  string signed_prekey_signature_algorithm = 6;
 }
 
 message AcquirePrekeyBundleRequest {
@@ -331,6 +335,10 @@ message DirectMessageEnvelope {
   bytes recipient_signed_prekey_public = 6;
   string recipient_one_time_prekey_id = 7;
   bytes recipient_one_time_prekey_public = 8;
+  string e2ee_algorithm = 9;
+  bytes ratchet_public_key = 10;
+  int32 previous_chain_length = 11;
+  int32 message_number = 12;
 }
 
 message AttachmentDirectEnvelope {
@@ -342,6 +350,10 @@ message AttachmentDirectEnvelope {
   bytes recipient_signed_prekey_public = 6;
   string recipient_one_time_prekey_id = 7;
   bytes recipient_one_time_prekey_public = 8;
+  string e2ee_algorithm = 9;
+  bytes ratchet_public_key = 10;
+  int32 previous_chain_length = 11;
+  int32 message_number = 12;
 }
 
 message ConversationKey {
@@ -391,6 +403,10 @@ message Message {
   bytes recipient_one_time_prekey_public = 15;
   repeated Attachment attachments = 16;
   string sender_device_id = 17;
+  string e2ee_algorithm = 18;
+  bytes ratchet_public_key = 19;
+  int32 previous_chain_length = 20;
+  int32 message_number = 21;
 }
 
 message SendMessageRequest {

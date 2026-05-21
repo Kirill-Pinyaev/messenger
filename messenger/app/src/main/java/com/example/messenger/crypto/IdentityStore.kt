@@ -29,6 +29,7 @@ data class IdentityState(
     val signedPrekeyId: String,
     val signedPrekeyPublicBytes: ByteArray,
     val signedPrekeyPrivateBytes: ByteArray,
+    val signedPrekeySignature: ByteArray,
     val oneTimePrekeys: List<OtpKey>,
     val published: Boolean
 ) {
@@ -54,26 +55,18 @@ class IdentityStore(private val context: Context) {
     }
 
     fun generate(username: String, deviceId: String): IdentityState {
-        val identKp = E2EE.generateKeyPair()
-        val spkKp = E2EE.generateKeyPair()
-        val otps = (1..10).map {
-            val kp = E2EE.generateKeyPair()
-            OtpKey(
-                keyId = "${username}_otp_${System.currentTimeMillis()}_$it",
-                publicBytes = E2EE.exportPublicKey(kp.public),
-                privateBytes = E2EE.exportPrivateKey(kp.private),
-                published = false
-            )
-        }
+        val ratchet = DoubleRatchet.createIdentity(username, deviceId)
+        val otps = emptyList<OtpKey>()
         return IdentityState(
             username = username,
             deviceId = deviceId,
-            keyId = "${username}_identity_${System.currentTimeMillis()}",
-            publicKeyBytes = E2EE.exportPublicKey(identKp.public),
-            privateKeyBytes = E2EE.exportPrivateKey(identKp.private),
-            signedPrekeyId = "${username}_spk_${System.currentTimeMillis()}",
-            signedPrekeyPublicBytes = E2EE.exportPublicKey(spkKp.public),
-            signedPrekeyPrivateBytes = E2EE.exportPrivateKey(spkKp.private),
+            keyId = ratchet.keyId,
+            publicKeyBytes = ratchet.identityPublic,
+            privateKeyBytes = ratchet.identityPrivate,
+            signedPrekeyId = ratchet.signedPrekeyId,
+            signedPrekeyPublicBytes = ratchet.signedPrekeyPublic,
+            signedPrekeyPrivateBytes = ratchet.signedPrekeyPrivate,
+            signedPrekeySignature = ratchet.signedPrekeySignature,
             oneTimePrekeys = otps,
             published = false
         )
@@ -89,6 +82,7 @@ private fun IdentityState.toJson(): String = JSONObject().apply {
     put("spkId", signedPrekeyId)
     put("spkPub", signedPrekeyPublicBytes.b64())
     put("spkPriv", signedPrekeyPrivateBytes.b64())
+    put("spkSig", signedPrekeySignature.b64())
     put("published", published)
     put("otps", JSONArray().also { arr ->
         oneTimePrekeys.forEach { otp ->
@@ -123,6 +117,7 @@ private fun fromJson(json: String): IdentityState {
         signedPrekeyId = o.getString("spkId"),
         signedPrekeyPublicBytes = o.getString("spkPub").fromB64(),
         signedPrekeyPrivateBytes = o.getString("spkPriv").fromB64(),
+        signedPrekeySignature = o.optString("spkSig").takeIf { it.isNotBlank() }?.fromB64() ?: ByteArray(0),
         oneTimePrekeys = otps,
         published = o.getBoolean("published")
     )

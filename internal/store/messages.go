@@ -25,19 +25,19 @@ const (
 )
 
 type Attachment struct {
-	AttachmentID         string
-	Kind                 AttachmentKind
-	Filename             string
-	MimeType             string
-	SizeBytes            int64
-	MediaID              string
-	EncryptedDescriptor  []byte
-	DescriptorNonce      []byte
-	PreviewWidth         int32
-	PreviewHeight        int32
-	SHA256               []byte
-	CiphertextSize       int64
-	DirectEnvelopes      []AttachmentDirectEnvelope
+	AttachmentID        string
+	Kind                AttachmentKind
+	Filename            string
+	MimeType            string
+	SizeBytes           int64
+	MediaID             string
+	EncryptedDescriptor []byte
+	DescriptorNonce     []byte
+	PreviewWidth        int32
+	PreviewHeight       int32
+	SHA256              []byte
+	CiphertextSize      int64
+	DirectEnvelopes     []AttachmentDirectEnvelope
 }
 
 type DirectEnvelope struct {
@@ -49,6 +49,10 @@ type DirectEnvelope struct {
 	RecipientSignedPrekeyPublic  []byte
 	RecipientOneTimePrekeyID     string
 	RecipientOneTimePrekeyPublic []byte
+	E2EEAlgorithm                string
+	RatchetPublicKey             []byte
+	PreviousChainLength          int32
+	MessageNumber                int32
 }
 
 type AttachmentDirectEnvelope struct {
@@ -60,43 +64,51 @@ type AttachmentDirectEnvelope struct {
 	RecipientSignedPrekeyPublic  []byte
 	RecipientOneTimePrekeyID     string
 	RecipientOneTimePrekeyPublic []byte
+	E2EEAlgorithm                string
+	RatchetPublicKey             []byte
+	PreviousChainLength          int32
+	MessageNumber                int32
 }
 
 type MediaObject struct {
-	MediaID       string
-	OwnerUsername string
-	StorageKey    string
-	Filename      string
-	MimeType      string
-	Kind          AttachmentKind
-	SizeBytes     int64
+	MediaID        string
+	OwnerUsername  string
+	StorageKey     string
+	Filename       string
+	MimeType       string
+	Kind           AttachmentKind
+	SizeBytes      int64
 	CiphertextSize int64
-	Nonce         []byte
-	SHA256        []byte
-	CreatedAt     time.Time
-	UploadedAt    time.Time
-	Uploaded      bool
+	Nonce          []byte
+	SHA256         []byte
+	CreatedAt      time.Time
+	UploadedAt     time.Time
+	Uploaded       bool
 }
 
 type Message struct {
-	ID             int64
-	ConversationID string
-	From           string
-	To             string
-	SenderDeviceID string
-	Text           string
-	Ciphertext     []byte
-	Nonce          []byte
-	SenderKeyID    string
-	KeyVersion     int32
-	Encrypted      bool
-	RecipientSignedPrekeyID     string
-	RecipientSignedPrekeyPublic []byte
-	RecipientOneTimePrekeyID    string
+	ID                           int64
+	ConversationID               string
+	From                         string
+	To                           string
+	SenderDeviceID               string
+	Text                         string
+	Ciphertext                   []byte
+	Nonce                        []byte
+	SenderKeyID                  string
+	KeyVersion                   int32
+	Encrypted                    bool
+	RecipientSignedPrekeyID      string
+	RecipientSignedPrekeyPublic  []byte
+	RecipientOneTimePrekeyID     string
 	RecipientOneTimePrekeyPublic []byte
-	DirectEnvelopes []DirectEnvelope
-	Attachments    []Attachment
-	TS             time.Time
+	E2EEAlgorithm                string
+	RatchetPublicKey             []byte
+	PreviousChainLength          int32
+	MessageNumber                int32
+	DirectEnvelopes              []DirectEnvelope
+	Attachments                  []Attachment
+	TS                           time.Time
 }
 
 type MessageStore interface {
@@ -160,6 +172,7 @@ func (s *MemoryMessageStore) Save(_ context.Context, msg Message) (Message, erro
 	msg.Nonce = append([]byte(nil), msg.Nonce...)
 	msg.RecipientSignedPrekeyPublic = append([]byte(nil), msg.RecipientSignedPrekeyPublic...)
 	msg.RecipientOneTimePrekeyPublic = append([]byte(nil), msg.RecipientOneTimePrekeyPublic...)
+	msg.RatchetPublicKey = append([]byte(nil), msg.RatchetPublicKey...)
 	msg.DirectEnvelopes = dedupeDirectEnvelopes(cloneDirectEnvelopes(msg.DirectEnvelopes))
 	msg.Attachments = cloneAttachments(msg.Attachments)
 	s.byConv[msg.ConversationID] = append(s.byConv[msg.ConversationID], msg)
@@ -193,6 +206,7 @@ func (s *MemoryMessageStore) History(_ context.Context, conversationID string, l
 		out[i].Nonce = append([]byte(nil), out[i].Nonce...)
 		out[i].RecipientSignedPrekeyPublic = append([]byte(nil), out[i].RecipientSignedPrekeyPublic...)
 		out[i].RecipientOneTimePrekeyPublic = append([]byte(nil), out[i].RecipientOneTimePrekeyPublic...)
+		out[i].RatchetPublicKey = append([]byte(nil), out[i].RatchetPublicKey...)
 		out[i].DirectEnvelopes = cloneDirectEnvelopes(out[i].DirectEnvelopes)
 		out[i].Attachments = cloneAttachments(out[i].Attachments)
 	}
@@ -299,6 +313,7 @@ func (s *MemoryMessageStore) GetByID(_ context.Context, id int64) (Message, erro
 				msg.Nonce = append([]byte(nil), msg.Nonce...)
 				msg.RecipientSignedPrekeyPublic = append([]byte(nil), msg.RecipientSignedPrekeyPublic...)
 				msg.RecipientOneTimePrekeyPublic = append([]byte(nil), msg.RecipientOneTimePrekeyPublic...)
+				msg.RatchetPublicKey = append([]byte(nil), msg.RatchetPublicKey...)
 				msg.DirectEnvelopes = dedupeDirectEnvelopes(cloneDirectEnvelopes(msg.DirectEnvelopes))
 				msg.Attachments = cloneAttachments(msg.Attachments)
 				return msg, nil
@@ -492,6 +507,10 @@ func cloneDirectEnvelopes(items []DirectEnvelope) []DirectEnvelope {
 		if recipientOneTimePrekeyPublic == nil {
 			recipientOneTimePrekeyPublic = []byte{}
 		}
+		ratchetPublicKey := append([]byte(nil), item.RatchetPublicKey...)
+		if ratchetPublicKey == nil {
+			ratchetPublicKey = []byte{}
+		}
 		out = append(out, DirectEnvelope{
 			TargetUsername:               item.TargetUsername,
 			TargetDeviceID:               item.TargetDeviceID,
@@ -501,6 +520,10 @@ func cloneDirectEnvelopes(items []DirectEnvelope) []DirectEnvelope {
 			RecipientSignedPrekeyPublic:  recipientSignedPrekeyPublic,
 			RecipientOneTimePrekeyID:     item.RecipientOneTimePrekeyID,
 			RecipientOneTimePrekeyPublic: recipientOneTimePrekeyPublic,
+			E2EEAlgorithm:                item.E2EEAlgorithm,
+			RatchetPublicKey:             ratchetPublicKey,
+			PreviousChainLength:          item.PreviousChainLength,
+			MessageNumber:                item.MessageNumber,
 		})
 	}
 	return out
@@ -528,6 +551,10 @@ func cloneAttachmentDirectEnvelopes(items []AttachmentDirectEnvelope) []Attachme
 		if recipientOneTimePrekeyPublic == nil {
 			recipientOneTimePrekeyPublic = []byte{}
 		}
+		ratchetPublicKey := append([]byte(nil), item.RatchetPublicKey...)
+		if ratchetPublicKey == nil {
+			ratchetPublicKey = []byte{}
+		}
 		out = append(out, AttachmentDirectEnvelope{
 			TargetUsername:               item.TargetUsername,
 			TargetDeviceID:               item.TargetDeviceID,
@@ -537,6 +564,10 @@ func cloneAttachmentDirectEnvelopes(items []AttachmentDirectEnvelope) []Attachme
 			RecipientSignedPrekeyPublic:  recipientSignedPrekeyPublic,
 			RecipientOneTimePrekeyID:     item.RecipientOneTimePrekeyID,
 			RecipientOneTimePrekeyPublic: recipientOneTimePrekeyPublic,
+			E2EEAlgorithm:                item.E2EEAlgorithm,
+			RatchetPublicKey:             ratchetPublicKey,
+			PreviousChainLength:          item.PreviousChainLength,
+			MessageNumber:                item.MessageNumber,
 		})
 	}
 	return out

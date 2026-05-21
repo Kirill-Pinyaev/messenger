@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { Code, ConnectError } from "@connectrpc/connect";
@@ -123,8 +123,12 @@ test("shouldDecryptDirectAsSender returns true for locally sent same-account mes
 test("hasDirectBundleMaterial requires signed prekey bytes", () => {
   assert.equal(
     hasDirectBundleMaterial({
+      identityKey: {
+        publicKey: new Uint8Array([9, 9, 9]),
+      },
       signedPrekey: {
         publicKey: new Uint8Array([1, 2, 3]),
+        signature: new Uint8Array([4, 5, 6]),
       },
     }),
     true,

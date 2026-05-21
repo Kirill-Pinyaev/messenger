@@ -19,6 +19,8 @@ public  final class SignedPrekey extends
     algorithm_ = "";
     publicKey_ = com.google.protobuf.ByteString.EMPTY;
     deviceId_ = "";
+    signature_ = com.google.protobuf.ByteString.EMPTY;
+    signatureAlgorithm_ = "";
   }
   private int bitField0_;
   public static final int USERNAME_FIELD_NUMBER = 1;
@@ -284,6 +286,81 @@ public  final class SignedPrekey extends
       com.google.protobuf.ByteString value) {
     checkByteStringIsUtf8(value);
     deviceId_ = value.toStringUtf8();
+
+  }
+
+  public static final int SIGNATURE_FIELD_NUMBER = 7;
+  private com.google.protobuf.ByteString signature_;
+  /**
+   * <code>bytes signature = 7;</code>
+   * @return The signature.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString getSignature() {
+    return signature_;
+  }
+  /**
+   * <code>bytes signature = 7;</code>
+   * @param value The signature to set.
+   */
+  private void setSignature(com.google.protobuf.ByteString value) {
+    java.lang.Class<?> valueClass = value.getClass();
+  
+    signature_ = value;
+  }
+  /**
+   * <code>bytes signature = 7;</code>
+   */
+  private void clearSignature() {
+
+    signature_ = getDefaultInstance().getSignature();
+  }
+
+  public static final int SIGNATURE_ALGORITHM_FIELD_NUMBER = 8;
+  private java.lang.String signatureAlgorithm_;
+  /**
+   * <code>string signature_algorithm = 8;</code>
+   * @return The signatureAlgorithm.
+   */
+  @java.lang.Override
+  public java.lang.String getSignatureAlgorithm() {
+    return signatureAlgorithm_;
+  }
+  /**
+   * <code>string signature_algorithm = 8;</code>
+   * @return The bytes for signatureAlgorithm.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getSignatureAlgorithmBytes() {
+    return com.google.protobuf.ByteString.copyFromUtf8(signatureAlgorithm_);
+  }
+  /**
+   * <code>string signature_algorithm = 8;</code>
+   * @param value The signatureAlgorithm to set.
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setSignatureAlgorithm(
+      java.lang.String value) {
+    value.getClass();  // minimal bytecode null check
+
+    signatureAlgorithm_ = value;
+  }
+  /**
+   * <code>string signature_algorithm = 8;</code>
+   */
+  private void clearSignatureAlgorithm() {
+
+    signatureAlgorithm_ = getDefaultInstance().getSignatureAlgorithm();
+  }
+  /**
+   * <code>string signature_algorithm = 8;</code>
+   * @param value The bytes for signatureAlgorithm to set.
+   */
+  private void setSignatureAlgorithmBytes(
+      com.google.protobuf.ByteString value) {
+    checkByteStringIsUtf8(value);
+    signatureAlgorithm_ = value.toStringUtf8();
 
   }
 
@@ -655,6 +732,83 @@ public  final class SignedPrekey extends
       return this;
     }
 
+    /**
+     * <code>bytes signature = 7;</code>
+     * @return The signature.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString getSignature() {
+      return instance.getSignature();
+    }
+    /**
+     * <code>bytes signature = 7;</code>
+     * @param value The signature to set.
+     * @return This builder for chaining.
+     */
+    public Builder setSignature(com.google.protobuf.ByteString value) {
+      copyOnWrite();
+      instance.setSignature(value);
+      return this;
+    }
+    /**
+     * <code>bytes signature = 7;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearSignature() {
+      copyOnWrite();
+      instance.clearSignature();
+      return this;
+    }
+
+    /**
+     * <code>string signature_algorithm = 8;</code>
+     * @return The signatureAlgorithm.
+     */
+    @java.lang.Override
+    public java.lang.String getSignatureAlgorithm() {
+      return instance.getSignatureAlgorithm();
+    }
+    /**
+     * <code>string signature_algorithm = 8;</code>
+     * @return The bytes for signatureAlgorithm.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getSignatureAlgorithmBytes() {
+      return instance.getSignatureAlgorithmBytes();
+    }
+    /**
+     * <code>string signature_algorithm = 8;</code>
+     * @param value The signatureAlgorithm to set.
+     * @return This builder for chaining.
+     */
+    public Builder setSignatureAlgorithm(
+        java.lang.String value) {
+      copyOnWrite();
+      instance.setSignatureAlgorithm(value);
+      return this;
+    }
+    /**
+     * <code>string signature_algorithm = 8;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearSignatureAlgorithm() {
+      copyOnWrite();
+      instance.clearSignatureAlgorithm();
+      return this;
+    }
+    /**
+     * <code>string signature_algorithm = 8;</code>
+     * @param value The bytes for signatureAlgorithm to set.
+     * @return This builder for chaining.
+     */
+    public Builder setSignatureAlgorithmBytes(
+        com.google.protobuf.ByteString value) {
+      copyOnWrite();
+      instance.setSignatureAlgorithmBytes(value);
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:messenger.v1.SignedPrekey)
   }
   @java.lang.Override
@@ -678,10 +832,12 @@ public  final class SignedPrekey extends
             "publicKey_",
             "publishedAt_",
             "deviceId_",
+            "signature_",
+            "signatureAlgorithm_",
           };
           java.lang.String info =
-              "\u0000\u0006\u0000\u0001\u0001\u0006\u0006\u0000\u0000\u0000\u0001\u0208\u0002\u0208" +
-              "\u0003\u0208\u0004\n\u0005\u1009\u0000\u0006\u0208";
+              "\u0000\b\u0000\u0001\u0001\b\b\u0000\u0000\u0000\u0001\u0208\u0002\u0208\u0003\u0208" +
+              "\u0004\n\u0005\u1009\u0000\u0006\u0208\u0007\n\b\u0208";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       // fall through

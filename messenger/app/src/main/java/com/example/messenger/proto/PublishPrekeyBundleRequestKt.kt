@@ -149,6 +149,40 @@ public object PublishPrekeyBundleRequestKt {
     public fun com.google.protobuf.kotlin.DslList<com.example.messenger.proto.OneTimePrekeyUpload, OneTimePrekeysProxy>.clear() {
       _builder.clearOneTimePrekeys()
     }
+
+    /**
+     * <code>bytes signed_prekey_signature = 5;</code>
+     */
+    public var signedPrekeySignature: com.google.protobuf.ByteString
+      @kotlin.jvm.JvmName("getSignedPrekeySignature")
+        get() = _builder.signedPrekeySignature
+      @kotlin.jvm.JvmName("setSignedPrekeySignature")
+        set(value) {
+        _builder.signedPrekeySignature = value
+      }
+    /**
+     * `bytes signed_prekey_signature = 5;`
+     */
+    public fun clearSignedPrekeySignature() {
+      _builder.clearSignedPrekeySignature()
+    }
+
+    /**
+     * `string signed_prekey_signature_algorithm = 6;`
+     */
+    public var signedPrekeySignatureAlgorithm: kotlin.String
+      @kotlin.jvm.JvmName("getSignedPrekeySignatureAlgorithm")
+        get() = _builder.signedPrekeySignatureAlgorithm
+      @kotlin.jvm.JvmName("setSignedPrekeySignatureAlgorithm")
+        set(value) {
+        _builder.signedPrekeySignatureAlgorithm = value
+      }
+    /**
+     * `string signed_prekey_signature_algorithm = 6;`
+     */
+    public fun clearSignedPrekeySignatureAlgorithm() {
+      _builder.clearSignedPrekeySignatureAlgorithm()
+    }
   }
 }
 public inline fun com.example.messenger.proto.PublishPrekeyBundleRequest.copy(block: `com.example.messenger.proto`.PublishPrekeyBundleRequestKt.Dsl.() -> kotlin.Unit): com.example.messenger.proto.PublishPrekeyBundleRequest =

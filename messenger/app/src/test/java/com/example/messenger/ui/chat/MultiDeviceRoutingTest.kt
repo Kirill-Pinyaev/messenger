@@ -33,7 +33,6 @@ class MultiDeviceRoutingTest {
             listOf(
                 "bob|bob-web|bob-web-spk|bob-web-otp",
                 "bob|bob-phone|bob-phone-spk|bob-phone-otp",
-                "alice|alice-phone|alice-local-spk|",
                 "alice|alice-tablet|alice-tablet-spk|alice-tablet-otp",
             ),
             targets.map { "${it.username}|${it.deviceId}|${it.signedPrekeyId}|${it.oneTimePrekeyId}" },
@@ -53,9 +52,7 @@ class MultiDeviceRoutingTest {
             ),
         )
 
-        assertEquals(1, targets.size)
-        assertEquals("alice-local-spk", targets.single().signedPrekeyId)
-        assertEquals("", targets.single().oneTimePrekeyId)
+        assertEquals(0, targets.size)
     }
 
     @Test
@@ -100,6 +97,7 @@ class MultiDeviceRoutingTest {
                     .setUsername(username)
                     .setDeviceId(deviceId)
                     .setKeyId("$deviceId-identity")
+                    .setPublicKey(com.google.protobuf.ByteString.copyFromUtf8("$deviceId-identity-public"))
                     .build(),
             )
             .setSignedPrekey(
@@ -108,6 +106,8 @@ class MultiDeviceRoutingTest {
                     .setDeviceId(deviceId)
                     .setKeyId(signedPrekeyId)
                     .setPublicKey(com.google.protobuf.ByteString.copyFromUtf8(signedPrekeyId))
+                    .setSignature(com.google.protobuf.ByteString.copyFromUtf8("$signedPrekeyId-signature"))
+                    .setSignatureAlgorithm("Ed25519")
                     .build(),
             )
             .setOneTimePrekey(

@@ -7,6 +7,19 @@ export function identityStorageKey(username, deviceId) {
 }
 
 export function hasUsableDirectIdentityMaterial(identity) {
+  if (
+    identity
+    && identity.algorithm === "Ed25519"
+    && identity.privateKeyBytes?.length > 0
+    && identity.publicKeyBytes?.length > 0
+    && identity.signedPrekey
+    && identity.signedPrekey.algorithm === "X25519"
+    && identity.signedPrekey.privateKeyBytes?.length > 0
+    && identity.signedPrekey.publicKeyBytes?.length > 0
+    && identity.signedPrekey.signature?.length > 0
+  ) {
+    return true;
+  }
   return !!(
     identity
     && identity.privateKey

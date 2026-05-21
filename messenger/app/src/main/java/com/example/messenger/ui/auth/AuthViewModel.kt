@@ -69,6 +69,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             repo.publishPrekeyBundle(
                 spkId = identity.signedPrekeyId,
                 spkPub = identity.signedPrekeyPublicBytes,
+                spkSignature = identity.signedPrekeySignature,
                 otps = unpublishedOtps.map { it.keyId to it.publicBytes }
             )
             app.identityStore.save(identity.copy(
