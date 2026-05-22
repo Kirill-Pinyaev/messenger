@@ -33,7 +33,7 @@ test-integration:
 	go test -tags=integration ./internal/store -run TestPostgresStoresIntegration -count=1
 
 test-web:
-	cd web && node --test src/lib/*.test.js
+	cd web && npm test
 
 cover:
 	go test ./internal/auth ./internal/grpcapi ./internal/store -coverprofile=coverage.out

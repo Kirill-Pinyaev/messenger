@@ -103,3 +103,38 @@ test("failed decrypt does not advance receiving ratchet session", async () => {
 
   assert.equal(await decryptRatchetMessage(message, bob, alice.toIdentityKey(), "alice|bob"), "retryable");
 });
+
+test("Double Ratchet decrypts older skipped messages after a later message", async () => {
+  const alice = await createRatchetIdentity("alice", "web");
+  const bob = await createRatchetIdentity("bob", "phone");
+
+  const first = await encryptRatchetMessage("first", alice, bob.toPrekeyBundle(), "alice|bob");
+  const second = await encryptRatchetMessage("second", alice, bob.toPrekeyBundle(), "alice|bob");
+
+  assert.equal(await decryptRatchetMessage(second, bob, alice.toIdentityKey(), "alice|bob"), "second");
+  assert.equal(await decryptRatchetMessage(first, bob, alice.toIdentityKey(), "alice|bob"), "first");
+});
+
+test("Double Ratchet recovers an older initial-chain message if skipped cache was not persisted", async () => {
+  const alice = await createRatchetIdentity("alice", "web");
+  const bob = await createRatchetIdentity("bob", "phone");
+
+  const first = await encryptRatchetMessage("first", alice, bob.toPrekeyBundle(), "alice|bob");
+  const second = await encryptRatchetMessage("second", alice, bob.toPrekeyBundle(), "alice|bob");
+
+  assert.equal(await decryptRatchetMessage(second, bob, alice.toIdentityKey(), "alice|bob"), "second");
+  bob.skippedMessageKeys = {};
+
+  assert.equal(await decryptRatchetMessage(first, bob, alice.toIdentityKey(), "alice|bob"), "first");
+});
+
+test("Double Ratchet decrypts independent initial messages after both sides send before receiving", async () => {
+  const alice = await createRatchetIdentity("alice", "web");
+  const bob = await createRatchetIdentity("bob", "android");
+
+  const aliceFirst = await encryptRatchetMessage("alice first", alice, bob.toPrekeyBundle(), "alice|bob");
+  const bobFirst = await encryptRatchetMessage("bob first", bob, alice.toPrekeyBundle(), "alice|bob");
+
+  assert.equal(await decryptRatchetMessage(aliceFirst, bob, alice.toIdentityKey(), "alice|bob"), "alice first");
+  assert.equal(await decryptRatchetMessage(bobFirst, alice, bob.toIdentityKey(), "alice|bob"), "bob first");
+});

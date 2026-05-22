@@ -162,6 +162,7 @@ export async function createRatchetIdentity(username, deviceId = "") {
     oneTimePrekeys,
     ratchetSessions: {},
     sentMessageKeys: {},
+    skippedMessageKeys: {},
     toIdentityKey() {
       return { username, deviceId, keyId: this.keyId, algorithm: "Ed25519", publicKey: this.publicKeyBytes };
     },
@@ -244,6 +245,10 @@ function sentKey(ratchetPublicKey, messageNumber) {
   return `${b64(ratchetPublicKey)}|${messageNumber}`;
 }
 
+function skippedKey(ratchetPublicKey, messageNumber) {
+  return `${b64(ratchetPublicKey)}|${messageNumber}`;
+}
+
 function cloneSession(session) {
   return {
     ...session,
@@ -321,6 +326,7 @@ async function nextReceivingMessageKey(identity, payload, senderIdentityKey, con
   const id = sessionKey(senderUsername, senderDeviceId);
   if (!identity.ratchetSessions) identity.ratchetSessions = {};
   let session = identity.ratchetSessions[id] ? cloneSession(identity.ratchetSessions[id]) : null;
+  const skipped = {};
   if (!session) {
     const rootKey = await deriveInitialRootAsRecipient(identity, payload);
     const receiving = await kdfRoot(rootKey, x25519.getSharedSecret(identity.signedPrekey.privateKeyBytes, payload.ratchetPublicKey));
@@ -338,6 +344,13 @@ async function nextReceivingMessageKey(identity, payload, senderIdentityKey, con
       receivingMessageNumber: 0,
     };
   } else if (b64(session.remoteRatchetPublicKey) !== b64(payload.ratchetPublicKey)) {
+    while (session.receivingChainKey && session.receivingMessageNumber < payload.previousChainLength) {
+      const messageNumber = session.receivingMessageNumber;
+      const chain = await kdfChain(session.receivingChainKey);
+      session.receivingChainKey = chain.nextChainKey;
+      skipped[skippedKey(session.remoteRatchetPublicKey, messageNumber)] = b64(chain.messageKey);
+      session.receivingMessageNumber += 1;
+    }
     const recv = await kdfRoot(session.rootKey, x25519.getSharedSecret(session.localRatchetPrivateKey, payload.ratchetPublicKey));
     const ratchet = keypair(x25519);
     const send = await kdfRoot(recv.rootKey, x25519.getSharedSecret(ratchet.privateKey, payload.ratchetPublicKey));
@@ -354,14 +367,70 @@ async function nextReceivingMessageKey(identity, payload, senderIdentityKey, con
       receivingMessageNumber: 0,
     };
   }
+  if (payload.messageNumber < session.receivingMessageNumber) {
+    throw new Error("missing skipped message key");
+  }
   let messageKey;
   while (session.receivingMessageNumber <= payload.messageNumber) {
+    const messageNumber = session.receivingMessageNumber;
     const chain = await kdfChain(session.receivingChainKey);
     session.receivingChainKey = chain.nextChainKey;
-    messageKey = chain.messageKey;
+    if (messageNumber === payload.messageNumber) {
+      messageKey = chain.messageKey;
+    } else {
+      skipped[skippedKey(payload.ratchetPublicKey, messageNumber)] = b64(chain.messageKey);
+    }
     session.receivingMessageNumber += 1;
   }
-  return { messageKey, sessionId: id, session };
+  return { messageKey, sessionId: id, session, skipped };
+}
+
+async function deriveInitialMessageKey(recipientIdentity, payload) {
+  const rootKey = await deriveInitialRootAsRecipient(recipientIdentity, payload);
+  const receiving = await kdfRoot(rootKey, x25519.getSharedSecret(recipientIdentity.signedPrekey.privateKeyBytes, payload.ratchetPublicKey));
+  let chainKey = receiving.chainKey;
+  let messageKey = null;
+  for (let i = 0; i <= payload.messageNumber; i += 1) {
+    const chain = await kdfChain(chainKey);
+    chainKey = chain.nextChainKey;
+    messageKey = chain.messageKey;
+  }
+  return messageKey;
+}
+
+async function nextInitialReceivingMessageKey(identity, payload, senderIdentityKey, conversationId) {
+  const senderUsername = senderIdentityKey.username || payload.from || "peer";
+  const senderDeviceId = senderIdentityKey.deviceId || payload.senderDeviceId || conversationId || "";
+  const id = sessionKey(senderUsername, senderDeviceId);
+  const rootKey = await deriveInitialRootAsRecipient(identity, payload);
+  const receiving = await kdfRoot(rootKey, x25519.getSharedSecret(identity.signedPrekey.privateKeyBytes, payload.ratchetPublicKey));
+  const session = {
+    peerUsername: senderUsername,
+    peerDeviceId: senderDeviceId,
+    rootKey: receiving.rootKey,
+    sendingChainKey: null,
+    receivingChainKey: receiving.chainKey,
+    localRatchetPrivateKey: identity.signedPrekey.privateKeyBytes,
+    localRatchetPublicKey: identity.signedPrekey.publicKeyBytes,
+    remoteRatchetPublicKey: payload.ratchetPublicKey,
+    previousChainLength: 0,
+    sendingMessageNumber: 0,
+    receivingMessageNumber: 0,
+  };
+  const skipped = {};
+  let messageKey;
+  while (session.receivingMessageNumber <= payload.messageNumber) {
+    const messageNumber = session.receivingMessageNumber;
+    const chain = await kdfChain(session.receivingChainKey);
+    session.receivingChainKey = chain.nextChainKey;
+    if (messageNumber === payload.messageNumber) {
+      messageKey = chain.messageKey;
+    } else {
+      skipped[skippedKey(payload.ratchetPublicKey, messageNumber)] = b64(chain.messageKey);
+    }
+    session.receivingMessageNumber += 1;
+  }
+  return { messageKey, sessionId: id, session, skipped };
 }
 
 export async function decryptRatchetMessage(payload, recipientIdentity, senderIdentityKey = {}, conversationId = "") {
@@ -370,10 +439,37 @@ export async function decryptRatchetMessage(payload, recipientIdentity, senderId
   if (ownSent) {
     return decoder.decode(await aesGcmDecrypt(fromB64(ownSent), payload.ciphertext, payload.nonce));
   }
-  const next = await nextReceivingMessageKey(recipientIdentity, payload, senderIdentityKey, conversationId);
-  const plaintext = decoder.decode(await aesGcmDecrypt(next.messageKey, payload.ciphertext, payload.nonce));
+  const cachedSkippedKey = skippedKey(payload.ratchetPublicKey, payload.messageNumber);
+  const cachedSkipped = recipientIdentity.skippedMessageKeys?.[cachedSkippedKey];
+  if (cachedSkipped) {
+    const plaintext = decoder.decode(await aesGcmDecrypt(fromB64(cachedSkipped), payload.ciphertext, payload.nonce));
+    delete recipientIdentity.skippedMessageKeys[cachedSkippedKey];
+    return plaintext;
+  }
+  let next;
+  try {
+    next = await nextReceivingMessageKey(recipientIdentity, payload, senderIdentityKey, conversationId);
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "missing skipped message key") {
+      throw error;
+    }
+    const messageKey = await deriveInitialMessageKey(recipientIdentity, payload);
+    return decoder.decode(await aesGcmDecrypt(messageKey, payload.ciphertext, payload.nonce));
+  }
+  let plaintext;
+  try {
+    plaintext = decoder.decode(await aesGcmDecrypt(next.messageKey, payload.ciphertext, payload.nonce));
+  } catch (error) {
+    if (payload.recipientSignedPrekeyId !== recipientIdentity.signedPrekey?.keyId) {
+      throw error;
+    }
+    next = await nextInitialReceivingMessageKey(recipientIdentity, payload, senderIdentityKey, conversationId);
+    plaintext = decoder.decode(await aesGcmDecrypt(next.messageKey, payload.ciphertext, payload.nonce));
+  }
   if (!recipientIdentity.ratchetSessions) recipientIdentity.ratchetSessions = {};
+  if (!recipientIdentity.skippedMessageKeys) recipientIdentity.skippedMessageKeys = {};
   recipientIdentity.ratchetSessions[next.sessionId] = next.session;
+  Object.assign(recipientIdentity.skippedMessageKeys, next.skipped);
   return plaintext;
 }
 
@@ -412,6 +508,7 @@ export async function exportRatchetIdentity(identity) {
       remoteRatchetPublicKey: b64(session.remoteRatchetPublicKey),
     }])),
     sentMessageKeys: { ...(identity.sentMessageKeys || {}) },
+    skippedMessageKeys: { ...(identity.skippedMessageKeys || {}) },
   };
 }
 
@@ -453,5 +550,6 @@ export async function importRatchetIdentity(state) {
       remoteRatchetPublicKey: fromB64(session.remoteRatchetPublicKey),
     }])),
     sentMessageKeys: { ...(state.sentMessageKeys || {}) },
+    skippedMessageKeys: { ...(state.skippedMessageKeys || {}) },
   });
 }

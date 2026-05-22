@@ -416,21 +416,35 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (decryptAsSender) decryptOwnDirectCiphertext(msg, identity) else decryptIncomingDirectCiphertext(msg, identity)
 
     private suspend fun decryptIncomingDirectCiphertext(msg: Message, identity: IdentityState): String {
+        val latestIdentity = app.identityStore.load() ?: identity
+        val ratchetIdentity = latestIdentity.toRatchetIdentity()
         val senderPub = fetchSenderIdentity(msg.from, msg.senderKeyId)
-        return DoubleRatchet.decrypt(msg.toRatchetMessage(), identity.toRatchetIdentity(), RatchetIdentityKey(msg.from, msg.senderDeviceId, msg.senderKeyId, senderPub), activeConversationId)
+        return DoubleRatchet.decrypt(msg.toRatchetMessage(), ratchetIdentity, RatchetIdentityKey(msg.from, msg.senderDeviceId, msg.senderKeyId, senderPub), activeConversationId)
+            .also { app.identityStore.save(latestIdentity.withRatchetState(ratchetIdentity)) }
     }
 
-    private fun decryptOwnDirectCiphertext(msg: Message, identity: IdentityState): String {
-        return "[Не удалось расшифровать]"
+    private suspend fun decryptOwnDirectCiphertext(msg: Message, identity: IdentityState): String {
+        val latestIdentity = app.identityStore.load() ?: identity
+        val ratchetIdentity = latestIdentity.toRatchetIdentity()
+        val peer = if (msg.from == myUsername) msg.to else msg.from
+        return DoubleRatchet.decrypt(msg.toRatchetMessage(), ratchetIdentity, RatchetIdentityKey(peer, "", msg.senderKeyId, ByteArray(0)), activeConversationId)
+            .also { app.identityStore.save(latestIdentity.withRatchetState(ratchetIdentity)) }
     }
 
-    private fun decryptOwnDescriptor(msg: Message, item: Attachment, identity: IdentityState): String {
-        return "[Не удалось расшифровать]"
+    private suspend fun decryptOwnDescriptor(msg: Message, item: Attachment, identity: IdentityState): String {
+        val latestIdentity = app.identityStore.load() ?: identity
+        val ratchetIdentity = latestIdentity.toRatchetIdentity()
+        val peer = if (msg.from == myUsername) msg.to else msg.from
+        return DoubleRatchet.decrypt(msg.toRatchetMessage(item), ratchetIdentity, RatchetIdentityKey(peer, "", msg.senderKeyId, ByteArray(0)), activeConversationId)
+            .also { app.identityStore.save(latestIdentity.withRatchetState(ratchetIdentity)) }
     }
 
     private suspend fun decryptIncomingDescriptor(msg: Message, item: Attachment, identity: IdentityState): String {
+        val latestIdentity = app.identityStore.load() ?: identity
+        val ratchetIdentity = latestIdentity.toRatchetIdentity()
         val senderPub = fetchSenderIdentity(msg.from, msg.senderKeyId)
-        return DoubleRatchet.decrypt(msg.toRatchetMessage(item), identity.toRatchetIdentity(), RatchetIdentityKey(msg.from, msg.senderDeviceId, msg.senderKeyId, senderPub), activeConversationId)
+        return DoubleRatchet.decrypt(msg.toRatchetMessage(item), ratchetIdentity, RatchetIdentityKey(msg.from, msg.senderDeviceId, msg.senderKeyId, senderPub), activeConversationId)
+            .also { app.identityStore.save(latestIdentity.withRatchetState(ratchetIdentity)) }
     }
 
     private suspend fun fetchSenderIdentity(username: String, keyId: String): ByteArray {
@@ -445,11 +459,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun buildDirectMessageEnvelopes(
-        identity: IdentityState,
+        identity: RatchetIdentity,
         plaintext: String,
         targets: List<DirectBundleTarget>,
     ): List<DirectMessageEnvelope> = targets.map { target ->
-        val encrypted = DoubleRatchet.encrypt(plaintext, identity.toRatchetIdentity(), target.toRatchetBundle(), activeConversationId)
+        val encrypted = DoubleRatchet.encrypt(plaintext, identity, target.toRatchetBundle(), activeConversationId)
         DirectMessageEnvelope.newBuilder()
             .setTargetUsername(target.username)
             .setTargetDeviceId(target.deviceId)
@@ -473,11 +487,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun buildDirectAttachmentEnvelopes(
-        identity: IdentityState,
+        identity: RatchetIdentity,
         descriptorJson: String,
         targets: List<DirectBundleTarget>,
     ): List<AttachmentDirectEnvelope> = targets.map { target ->
-        val encrypted = DoubleRatchet.encrypt(descriptorJson, identity.toRatchetIdentity(), target.toRatchetBundle(), activeConversationId)
+        val encrypted = DoubleRatchet.encrypt(descriptorJson, identity, target.toRatchetBundle(), activeConversationId)
         AttachmentDirectEnvelope.newBuilder()
             .setTargetUsername(target.username)
             .setTargetDeviceId(target.deviceId)
@@ -517,12 +531,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     recipientBundles = recipientBundles,
                     ownBundles = ownBundles,
                 )
+                val ratchetIdentity = identity.toRatchetIdentity()
                 val directEnvelopes = text.takeIf { it.isNotBlank() }?.let {
-                    buildDirectMessageEnvelopes(identity, it, targets)
+                    buildDirectMessageEnvelopes(ratchetIdentity, it, targets)
                 } ?: emptyList()
                 val attachments = attachmentUri?.let {
-                    listOf(prepareDirectAttachment(it, identity, targets))
+                    listOf(prepareDirectAttachment(it, ratchetIdentity, targets))
                 } ?: emptyList()
+                app.identityStore.save(identity.withRatchetState(ratchetIdentity))
                 val createdAt = Instant.now()
                 val archiveRecords = buildArchiveRecordsForDirect(
                     participants = listOf(myUsername, toUsername),
@@ -730,7 +746,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun prepareDirectAttachment(uri: Uri, identity: IdentityState, targets: List<DirectBundleTarget>): PreparedAttachment {
+    private suspend fun prepareDirectAttachment(uri: Uri, identity: RatchetIdentity, targets: List<DirectBundleTarget>): PreparedAttachment {
         val selected = readSelectedAttachment(uri)
         val encrypted = E2EE.encryptMedia(selected.bytes, selected.mimeType, selected.filename, selected.kindName)
         val prepared = repo!!.prepareMediaUpload(selected.filename, selected.mimeType, selected.bytes.size.toLong(), selected.kind)
@@ -906,6 +922,15 @@ private fun IdentityState.toRatchetIdentity(): RatchetIdentity = RatchetIdentity
     signedPrekeyPrivate = signedPrekeyPrivateBytes,
     signedPrekeyPublic = signedPrekeyPublicBytes,
     signedPrekeySignature = signedPrekeySignature,
+    sessions = ratchetSessions.toMutableMap(),
+    sentMessageKeys = sentMessageKeys.toMutableMap(),
+    skippedMessageKeys = skippedMessageKeys.toMutableMap(),
+)
+
+private fun IdentityState.withRatchetState(ratchet: RatchetIdentity): IdentityState = copy(
+    ratchetSessions = ratchet.sessions.toMap(),
+    sentMessageKeys = ratchet.sentMessageKeys.toMap(),
+    skippedMessageKeys = ratchet.skippedMessageKeys.toMap(),
 )
 
 private fun DirectBundleTarget.toRatchetBundle(): RatchetPrekeyBundle = RatchetPrekeyBundle(

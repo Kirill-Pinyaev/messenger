@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	messengerv1 "messenger/gen/messenger/v1"
 	"messenger/internal/auth"
@@ -38,53 +40,108 @@ func main() {
 
 func initStores(ctx context.Context) (store.UserStore, store.MessageStore, store.ConversationStore, store.KeyStore, store.ArchiveStore, func()) {
 	dbURL := os.Getenv("DATABASE_URL")
+	timeout := envDurationOrDefault("POSTGRES_CONNECT_TIMEOUT", 30*time.Second)
+	stores, err := initStoresWithRetry(ctx, dbURL, timeout, time.Second)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return stores.userStore, stores.msgStore, stores.convStore, stores.keyStore, stores.archiveStore, stores.close
+}
+
+type initializedStores struct {
+	userStore    store.UserStore
+	msgStore     store.MessageStore
+	convStore    store.ConversationStore
+	keyStore     store.KeyStore
+	archiveStore store.ArchiveStore
+	close        func()
+}
+
+func initStoresWithRetry(ctx context.Context, dbURL string, timeout, interval time.Duration) (initializedStores, error) {
 	if dbURL == "" {
 		log.Println("DATABASE_URL is empty, using in-memory stores")
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
+		return initializedStores{
+			userStore:    store.NewMemoryUserStore(),
+			msgStore:     store.NewMemoryMessageStore(),
+			convStore:    store.NewMemoryConversationStore(),
+			keyStore:     store.NewMemoryKeyStore(),
+			archiveStore: store.NewMemoryArchiveStore(),
+			close:        func() {},
+		}, nil
 	}
 
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	if interval <= 0 {
+		interval = time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		stores, err := initPostgresStores(ctx, dbURL)
+		if err == nil {
+			log.Println("connected to Postgres")
+			return stores, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return initializedStores{}, fmt.Errorf("failed to initialize Postgres stores after %s: %w", timeout, lastErr)
+		}
+		log.Println("Postgres is not ready yet, retrying:", err)
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return initializedStores{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func initPostgresStores(ctx context.Context, dbURL string) (initializedStores, error) {
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
-		log.Println("failed to connect to Postgres, using in-memory stores:", err)
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
+		return initializedStores{}, err
 	}
 
 	userStore, err := store.NewPostgresUserStore(ctx, pool)
 	if err != nil {
 		pool.Close()
-		log.Println("failed to init Postgres user store, using in-memory stores:", err)
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
+		return initializedStores{}, err
 	}
 
 	msgStore, err := store.NewPostgresMessageStore(ctx, pool)
 	if err != nil {
 		pool.Close()
-		log.Println("failed to init Postgres message store, using in-memory stores:", err)
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
+		return initializedStores{}, err
 	}
 
 	convStore, err := store.NewPostgresConversationStore(ctx, pool)
 	if err != nil {
 		pool.Close()
-		log.Println("failed to init Postgres conversation store, using in-memory stores:", err)
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
+		return initializedStores{}, err
 	}
 
 	keyStore, err := store.NewPostgresKeyStore(ctx, pool)
 	if err != nil {
 		pool.Close()
-		log.Println("failed to init Postgres key store, using in-memory stores:", err)
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
+		return initializedStores{}, err
 	}
 	archiveStore, err := store.NewPostgresArchiveStore(ctx, pool)
 	if err != nil {
 		pool.Close()
-		log.Println("failed to init Postgres archive store, using in-memory stores:", err)
-		return store.NewMemoryUserStore(), store.NewMemoryMessageStore(), store.NewMemoryConversationStore(), store.NewMemoryKeyStore(), store.NewMemoryArchiveStore(), func() {}
+		return initializedStores{}, err
 	}
 
-	log.Println("connected to Postgres")
-	return userStore, msgStore, convStore, keyStore, archiveStore, pool.Close
+	return initializedStores{
+		userStore:    userStore,
+		msgStore:     msgStore,
+		convStore:    convStore,
+		keyStore:     keyStore,
+		archiveStore: archiveStore,
+		close:        pool.Close,
+	}, nil
 }
 
 func serveHTTP(addr string, grpcServer *grpc.Server) {
@@ -135,6 +192,17 @@ func newGRPCServer(apiServer *grpcapi.Server) *grpc.Server {
 func envOrDefault(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return fallback
+}
+
+func envDurationOrDefault(key string, fallback time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			log.Fatal(err)
+		}
+		return parsed
 	}
 	return fallback
 }

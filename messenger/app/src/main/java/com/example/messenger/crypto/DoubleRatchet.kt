@@ -11,6 +11,7 @@ import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.Mac
+import javax.crypto.AEADBadTagException
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
@@ -71,6 +72,7 @@ data class RatchetIdentity(
     val signedPrekeySignature: ByteArray,
     val sessions: MutableMap<String, RatchetSession> = mutableMapOf(),
     val sentMessageKeys: MutableMap<String, ByteArray> = mutableMapOf(),
+    val skippedMessageKeys: MutableMap<String, ByteArray> = mutableMapOf(),
 ) {
     fun toPrekeyBundle(): RatchetPrekeyBundle = RatchetPrekeyBundle(
         username = username,
@@ -169,13 +171,38 @@ object DoubleRatchet {
     fun decrypt(message: RatchetMessage, recipient: RatchetIdentity, senderIdentity: RatchetIdentityKey, conversationId: String): String {
         require(message.e2eeAlgorithm == ALGORITHM) { "unsupported direct E2EE algorithm" }
         val sentKey = recipient.sentMessageKeys[sentKey(message.ratchetPublicKey, message.messageNumber)]
-        val messageKey = sentKey ?: nextReceivingKey(message, recipient, senderIdentity, conversationId)
-        return aesGcmDecrypt(messageKey, message.ciphertext, message.nonce).decodeToString()
+        val skippedKey = skippedKey(message.ratchetPublicKey, message.messageNumber)
+        val skipped = recipient.skippedMessageKeys[skippedKey]
+        if (skipped != null) {
+            val plaintext = aesGcmDecrypt(skipped, message.ciphertext, message.nonce).decodeToString()
+            recipient.skippedMessageKeys.remove(skippedKey)
+            return plaintext
+        }
+        if (sentKey != null) {
+            return aesGcmDecrypt(sentKey, message.ciphertext, message.nonce).decodeToString()
+        }
+        val sessionsBefore = recipient.sessions.toMutableMap()
+        val skippedBefore = recipient.skippedMessageKeys.toMutableMap()
+        return try {
+            val messageKey = nextReceivingKey(message, recipient, senderIdentity, conversationId)
+            aesGcmDecrypt(messageKey, message.ciphertext, message.nonce).decodeToString()
+        } catch (error: AEADBadTagException) {
+            recipient.sessions.clear()
+            recipient.sessions.putAll(sessionsBefore)
+            recipient.skippedMessageKeys.clear()
+            recipient.skippedMessageKeys.putAll(skippedBefore)
+            if (message.recipientSignedPrekeyId != recipient.signedPrekeyId) {
+                throw error
+            }
+            val initial = nextInitialReceivingKey(message, recipient, senderIdentity, conversationId)
+            aesGcmDecrypt(initial, message.ciphertext, message.nonce).decodeToString()
+        }
     }
 
     private fun nextReceivingKey(message: RatchetMessage, recipient: RatchetIdentity, senderIdentity: RatchetIdentityKey, conversationId: String): ByteArray {
         val id = sessionKey(senderIdentity.username, senderIdentity.deviceId.ifBlank { conversationId })
         var session = recipient.sessions[id]
+        val skipped = mutableMapOf<String, ByteArray>()
         if (session == null) {
             val initialRoot = hkdf(x25519(recipient.signedPrekeyPrivate, message.ratchetPublicKey), "messenger-dr-root-v1")
             val receiving = kdfRoot(initialRoot, x25519(recipient.signedPrekeyPrivate, message.ratchetPublicKey))
@@ -191,6 +218,16 @@ object DoubleRatchet {
                 receivingMessageNumber = 0,
             )
         } else if (!session.remoteRatchetPublicKey.contentEquals(message.ratchetPublicKey)) {
+            var skippedCurrent = session ?: error("missing ratchet session")
+            while (skippedCurrent.receivingChainKey != null && skippedCurrent.receivingMessageNumber < message.previousChainLength) {
+                val chain = kdfChain(skippedCurrent.receivingChainKey)
+                skipped[skippedKey(skippedCurrent.remoteRatchetPublicKey, skippedCurrent.receivingMessageNumber)] = chain.second
+                skippedCurrent = skippedCurrent.copy(
+                    receivingChainKey = chain.first,
+                    receivingMessageNumber = skippedCurrent.receivingMessageNumber + 1,
+                )
+            }
+            session = skippedCurrent
             val recv = kdfRoot(session.rootKey, x25519(session.localRatchetPrivateKey, message.ratchetPublicKey))
             val ratchet = x25519KeyPair()
             val send = kdfRoot(recv.first, x25519(ratchet.first, message.ratchetPublicKey))
@@ -207,10 +244,64 @@ object DoubleRatchet {
             )
         }
         var current = session ?: error("missing ratchet session")
+        if (message.messageNumber < current.receivingMessageNumber) {
+            val initialKey = deriveInitialMessageKey(recipient, message)
+            return initialKey
+        }
         var messageKey = ByteArray(0)
         while (current.receivingMessageNumber <= message.messageNumber) {
             val chain = kdfChain(current.receivingChainKey ?: error("missing receiving chain"))
+            if (current.receivingMessageNumber == message.messageNumber) {
+                messageKey = chain.second
+            } else {
+                skipped[skippedKey(message.ratchetPublicKey, current.receivingMessageNumber)] = chain.second
+            }
+            current = current.copy(
+                receivingChainKey = chain.first,
+                receivingMessageNumber = current.receivingMessageNumber + 1,
+            )
+        }
+        recipient.sessions[id] = current
+        recipient.skippedMessageKeys.putAll(skipped)
+        return messageKey
+    }
+
+    private fun deriveInitialMessageKey(recipient: RatchetIdentity, message: RatchetMessage): ByteArray {
+        val initialRoot = hkdf(x25519(recipient.signedPrekeyPrivate, message.ratchetPublicKey), "messenger-dr-root-v1")
+        val receiving = kdfRoot(initialRoot, x25519(recipient.signedPrekeyPrivate, message.ratchetPublicKey))
+        var chainKey = receiving.second
+        var messageKey = ByteArray(0)
+        repeat(message.messageNumber + 1) {
+            val chain = kdfChain(chainKey)
+            chainKey = chain.first
             messageKey = chain.second
+        }
+        return messageKey
+    }
+
+    private fun nextInitialReceivingKey(message: RatchetMessage, recipient: RatchetIdentity, senderIdentity: RatchetIdentityKey, conversationId: String): ByteArray {
+        val id = sessionKey(senderIdentity.username, senderIdentity.deviceId.ifBlank { conversationId })
+        val initialRoot = hkdf(x25519(recipient.signedPrekeyPrivate, message.ratchetPublicKey), "messenger-dr-root-v1")
+        val receiving = kdfRoot(initialRoot, x25519(recipient.signedPrekeyPrivate, message.ratchetPublicKey))
+        var current = RatchetSession(
+            rootKey = receiving.first,
+            sendingChainKey = null,
+            receivingChainKey = receiving.second,
+            localRatchetPrivateKey = recipient.signedPrekeyPrivate,
+            localRatchetPublicKey = recipient.signedPrekeyPublic,
+            remoteRatchetPublicKey = message.ratchetPublicKey,
+            previousChainLength = 0,
+            sendingMessageNumber = 0,
+            receivingMessageNumber = 0,
+        )
+        var messageKey = ByteArray(0)
+        while (current.receivingMessageNumber <= message.messageNumber) {
+            val chain = kdfChain(current.receivingChainKey ?: error("missing receiving chain"))
+            if (current.receivingMessageNumber == message.messageNumber) {
+                messageKey = chain.second
+            } else {
+                recipient.skippedMessageKeys[skippedKey(message.ratchetPublicKey, current.receivingMessageNumber)] = chain.second
+            }
             current = current.copy(
                 receivingChainKey = chain.first,
                 receivingMessageNumber = current.receivingMessageNumber + 1,
@@ -236,6 +327,9 @@ object DoubleRatchet {
         put("sentMessageKeys", JSONObject().also { sent ->
             identity.sentMessageKeys.forEach { (key, value) -> sent.put(key, value.b64()) }
         })
+        put("skippedMessageKeys", JSONObject().also { skipped ->
+            identity.skippedMessageKeys.forEach { (key, value) -> skipped.put(key, value.b64()) }
+        })
     }.toString()
 
     fun importIdentity(json: String): RatchetIdentity {
@@ -246,6 +340,9 @@ object DoubleRatchet {
         val sent = mutableMapOf<String, ByteArray>()
         val sentJson = o.optJSONObject("sentMessageKeys") ?: JSONObject()
         sentJson.keys().forEach { key -> sent[key] = sentJson.getString(key).fromB64() }
+        val skipped = mutableMapOf<String, ByteArray>()
+        val skippedJson = o.optJSONObject("skippedMessageKeys") ?: JSONObject()
+        skippedJson.keys().forEach { key -> skipped[key] = skippedJson.getString(key).fromB64() }
         return RatchetIdentity(
             username = o.getString("username"),
             deviceId = o.optString("deviceId", ""),
@@ -258,6 +355,7 @@ object DoubleRatchet {
             signedPrekeySignature = o.getString("signedPrekeySignature").fromB64(),
             sessions = sessions,
             sentMessageKeys = sent,
+            skippedMessageKeys = skipped,
         )
     }
 
@@ -331,6 +429,7 @@ object DoubleRatchet {
 
     private fun sessionKey(username: String, deviceId: String): String = "$username|$deviceId"
     private fun sentKey(ratchetPublicKey: ByteArray, number: Int): String = "${ratchetPublicKey.b64()}|$number"
+    private fun skippedKey(ratchetPublicKey: ByteArray, number: Int): String = "${ratchetPublicKey.b64()}|$number"
 }
 
 private fun RatchetSession.toJson(): JSONObject = JSONObject().apply {

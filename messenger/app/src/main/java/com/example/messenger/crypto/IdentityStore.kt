@@ -31,7 +31,10 @@ data class IdentityState(
     val signedPrekeyPrivateBytes: ByteArray,
     val signedPrekeySignature: ByteArray,
     val oneTimePrekeys: List<OtpKey>,
-    val published: Boolean
+    val published: Boolean,
+    val ratchetSessions: Map<String, RatchetSession> = emptyMap(),
+    val sentMessageKeys: Map<String, ByteArray> = emptyMap(),
+    val skippedMessageKeys: Map<String, ByteArray> = emptyMap(),
 ) {
     fun identityPrivateKey(): PrivateKey = E2EE.importPrivateKey(privateKeyBytes)
     fun signedPrekeyPrivateKey(): PrivateKey = E2EE.importPrivateKey(signedPrekeyPrivateBytes)
@@ -84,6 +87,15 @@ private fun IdentityState.toJson(): String = JSONObject().apply {
     put("spkPriv", signedPrekeyPrivateBytes.b64())
     put("spkSig", signedPrekeySignature.b64())
     put("published", published)
+    put("ratchetSessions", JSONObject().also { sessions ->
+        ratchetSessions.forEach { (key, value) -> sessions.put(key, value.toJson()) }
+    })
+    put("sentMessageKeys", JSONObject().also { sent ->
+        sentMessageKeys.forEach { (key, value) -> sent.put(key, value.b64()) }
+    })
+    put("skippedMessageKeys", JSONObject().also { skipped ->
+        skippedMessageKeys.forEach { (key, value) -> skipped.put(key, value.b64()) }
+    })
     put("otps", JSONArray().also { arr ->
         oneTimePrekeys.forEach { otp ->
             arr.put(JSONObject().apply {
@@ -108,6 +120,15 @@ private fun fromJson(json: String): IdentityState {
             published = entry.getBoolean("published")
         )
     }
+    val sessions = mutableMapOf<String, RatchetSession>()
+    val sessionsJson = o.optJSONObject("ratchetSessions") ?: JSONObject()
+    sessionsJson.keys().forEach { key -> sessions[key] = sessionFromJson(sessionsJson.getJSONObject(key)) }
+    val sent = mutableMapOf<String, ByteArray>()
+    val sentJson = o.optJSONObject("sentMessageKeys") ?: JSONObject()
+    sentJson.keys().forEach { key -> sent[key] = sentJson.getString(key).fromB64() }
+    val skipped = mutableMapOf<String, ByteArray>()
+    val skippedJson = o.optJSONObject("skippedMessageKeys") ?: JSONObject()
+    skippedJson.keys().forEach { key -> skipped[key] = skippedJson.getString(key).fromB64() }
     return IdentityState(
         username = o.getString("username"),
         deviceId = o.optString("deviceId", ""),
@@ -119,9 +140,36 @@ private fun fromJson(json: String): IdentityState {
         signedPrekeyPrivateBytes = o.getString("spkPriv").fromB64(),
         signedPrekeySignature = o.optString("spkSig").takeIf { it.isNotBlank() }?.fromB64() ?: ByteArray(0),
         oneTimePrekeys = otps,
-        published = o.getBoolean("published")
+        published = o.getBoolean("published"),
+        ratchetSessions = sessions,
+        sentMessageKeys = sent,
+        skippedMessageKeys = skipped,
     )
 }
 
 private fun ByteArray.b64(): String = Base64.encodeToString(this, Base64.NO_WRAP)
 private fun String.fromB64(): ByteArray = Base64.decode(this, Base64.NO_WRAP)
+
+private fun RatchetSession.toJson(): JSONObject = JSONObject().apply {
+    put("rootKey", rootKey.b64())
+    put("sendingChainKey", sendingChainKey?.b64() ?: JSONObject.NULL)
+    put("receivingChainKey", receivingChainKey?.b64() ?: JSONObject.NULL)
+    put("localRatchetPrivateKey", localRatchetPrivateKey.b64())
+    put("localRatchetPublicKey", localRatchetPublicKey.b64())
+    put("remoteRatchetPublicKey", remoteRatchetPublicKey.b64())
+    put("previousChainLength", previousChainLength)
+    put("sendingMessageNumber", sendingMessageNumber)
+    put("receivingMessageNumber", receivingMessageNumber)
+}
+
+private fun sessionFromJson(o: JSONObject): RatchetSession = RatchetSession(
+    rootKey = o.getString("rootKey").fromB64(),
+    sendingChainKey = o.optString("sendingChainKey").takeIf { it.isNotBlank() && it != "null" }?.fromB64(),
+    receivingChainKey = o.optString("receivingChainKey").takeIf { it.isNotBlank() && it != "null" }?.fromB64(),
+    localRatchetPrivateKey = o.getString("localRatchetPrivateKey").fromB64(),
+    localRatchetPublicKey = o.getString("localRatchetPublicKey").fromB64(),
+    remoteRatchetPublicKey = o.getString("remoteRatchetPublicKey").fromB64(),
+    previousChainLength = o.getInt("previousChainLength"),
+    sendingMessageNumber = o.getInt("sendingMessageNumber"),
+    receivingMessageNumber = o.getInt("receivingMessageNumber"),
+)
