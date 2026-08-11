@@ -1,0 +1,551 @@
+syntax = "proto3";
+
+package messenger.v1;
+
+option go_package = "messenger/gen/messenger/v1;messengerv1";
+option java_package = "com.example.messenger.proto";
+option java_multiple_files = true;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+service AuthService {
+  rpc Register(RegisterRequest) returns (google.protobuf.Empty);
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc DeleteAccount(google.protobuf.Empty) returns (google.protobuf.Empty);
+}
+
+service UserService {
+  rpc GetProfile(GetProfileRequest) returns (Profile);
+  rpc UpdateProfile(UpdateProfileRequest) returns (Profile);
+  rpc SearchUsers(SearchUsersRequest) returns (SearchUsersResponse);
+  rpc ListConversations(google.protobuf.Empty) returns (ListConversationsResponse);
+  rpc PublishIdentityKey(PublishIdentityKeyRequest) returns (IdentityKey);
+  rpc PublishPrekeyBundle(PublishPrekeyBundleRequest) returns (PrekeyBundle);
+  rpc InitializeHistoryArchive(InitializeHistoryArchiveRequest) returns (HistoryArchiveHeader);
+  rpc GetHistoryArchiveHeader(google.protobuf.Empty) returns (HistoryArchiveHeader);
+  rpc GetArchivePublicKeys(GetArchivePublicKeysRequest) returns (GetArchivePublicKeysResponse);
+  rpc GetIdentityKey(GetIdentityKeyRequest) returns (IdentityKey);
+  rpc GetIdentityKeys(GetIdentityKeysRequest) returns (GetIdentityKeysResponse);
+  rpc AcquirePrekeyBundle(AcquirePrekeyBundleRequest) returns (PrekeyBundle);
+  rpc AcquirePrekeyBundles(AcquirePrekeyBundlesRequest) returns (AcquirePrekeyBundlesResponse);
+  rpc CreateGroupConversation(CreateGroupConversationRequest) returns (Conversation);
+  rpc AddGroupMembers(AddGroupMembersRequest) returns (Conversation);
+  rpc RemoveGroupMember(RemoveGroupMemberRequest) returns (Conversation);
+  rpc LeaveGroupConversation(LeaveGroupConversationRequest) returns (google.protobuf.Empty);
+  rpc TransferGroupAdmin(TransferGroupAdminRequest) returns (Conversation);
+  rpc UpsertConversationKey(UpsertConversationKeyRequest) returns (ConversationKey);
+  rpc GetConversationKey(GetConversationKeyRequest) returns (ConversationKey);
+}
+
+service MessageService {
+  rpc SendMessage(SendMessageRequest) returns (Message);
+  rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse);
+  rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
+  rpc DeleteMessage(DeleteMessageRequest) returns (google.protobuf.Empty);
+  rpc AppendHistoryArchiveRecords(AppendHistoryArchiveRecordsRequest) returns (google.protobuf.Empty);
+  rpc ListHistoryArchiveRecords(ListHistoryArchiveRecordsRequest) returns (ListHistoryArchiveRecordsResponse);
+  rpc PrepareMediaUpload(PrepareMediaUploadRequest) returns (PrepareMediaUploadResponse);
+  rpc UploadMedia(UploadMediaRequest) returns (UploadMediaResponse);
+  rpc GetMedia(GetMediaRequest) returns (GetMediaResponse);
+  rpc StreamEvents(StreamEventsRequest) returns (stream ServerEvent);
+}
+
+message RegisterRequest {
+  string username = 1;
+  string password = 2;
+  string first_name = 3;
+  string last_name = 4;
+  string avatar_hex = 5;
+  string avatar_data = 6;
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+  string device_id = 3;
+}
+
+message LoginResponse {
+  string token = 1;
+  string device_id = 2;
+}
+
+message Profile {
+  string username = 1;
+  string first_name = 2;
+  string last_name = 3;
+  string avatar_hex = 4;
+  string avatar_data = 5;
+}
+
+message GetProfileRequest {
+  string username = 1;
+}
+
+message UpdateProfileRequest {
+  string first_name = 1;
+  string last_name = 2;
+  string avatar_hex = 3;
+  string avatar_data = 4;
+}
+
+message SearchUsersRequest {
+  string query = 1;
+  int32 limit = 2;
+}
+
+message SearchUsersResponse {
+  repeated Profile items = 1;
+}
+
+message IdentityKey {
+  string username = 1;
+  string key_id = 2;
+  string algorithm = 3;
+  bytes public_key = 4;
+  google.protobuf.Timestamp published_at = 5;
+  string device_id = 6;
+}
+
+message PublishIdentityKeyRequest {
+  string key_id = 1;
+  string algorithm = 2;
+  bytes public_key = 3;
+}
+
+message SignedPrekey {
+  string username = 1;
+  string key_id = 2;
+  string algorithm = 3;
+  bytes public_key = 4;
+  google.protobuf.Timestamp published_at = 5;
+  string device_id = 6;
+  bytes signature = 7;
+  string signature_algorithm = 8;
+}
+
+message OneTimePrekey {
+  string username = 1;
+  string key_id = 2;
+  string algorithm = 3;
+  bytes public_key = 4;
+  google.protobuf.Timestamp published_at = 5;
+  string device_id = 6;
+}
+
+message PrekeyBundle {
+  string username = 1;
+  IdentityKey identity_key = 2;
+  SignedPrekey signed_prekey = 3;
+  OneTimePrekey one_time_prekey = 4;
+  string device_id = 5;
+}
+
+message ArchiveKeyBundle {
+  string username = 1;
+  bytes public_key = 2;
+  bytes encrypted_private_key = 3;
+  bytes kdf_salt = 4;
+  string kdf_params = 5;
+  int32 version = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message InitializeHistoryArchiveRequest {
+  bytes public_key = 1;
+  bytes encrypted_private_key = 2;
+  bytes kdf_salt = 3;
+  string kdf_params = 4;
+  int32 version = 5;
+}
+
+message HistoryArchiveHeader {
+  string username = 1;
+  bytes public_key = 2;
+  bytes encrypted_private_key = 3;
+  bytes kdf_salt = 4;
+  string kdf_params = 5;
+  int32 version = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message GetArchivePublicKeysRequest {
+  repeated string usernames = 1;
+}
+
+message GetArchivePublicKeysResponse {
+  repeated ArchiveKeyBundle items = 1;
+}
+
+enum HistoryArchiveRecordType {
+  HISTORY_ARCHIVE_RECORD_TYPE_UNSPECIFIED = 0;
+  HISTORY_ARCHIVE_RECORD_TYPE_DIRECT_MESSAGE = 1;
+  HISTORY_ARCHIVE_RECORD_TYPE_GROUP_MESSAGE = 2;
+  HISTORY_ARCHIVE_RECORD_TYPE_DIRECT_ATTACHMENT_DESCRIPTOR = 3;
+  HISTORY_ARCHIVE_RECORD_TYPE_GROUP_ATTACHMENT_DESCRIPTOR = 4;
+  HISTORY_ARCHIVE_RECORD_TYPE_GROUP_KEY_VERSION = 5;
+}
+
+message HistoryArchiveRecord {
+  int64 sequence = 1;
+  string record_id = 2;
+  string owner_username = 3;
+  string conversation_id = 4;
+  HistoryArchiveRecordType record_type = 5;
+  int64 message_id = 6;
+  string attachment_id = 7;
+  int32 group_key_version = 8;
+  string sender = 9;
+  google.protobuf.Timestamp created_at = 10;
+  bytes ciphertext = 11;
+  bytes nonce = 12;
+  bytes ephemeral_public_key = 13;
+  int32 archive_key_version = 14;
+}
+
+message AppendHistoryArchiveRecordsRequest {
+  repeated HistoryArchiveRecord items = 1;
+}
+
+message ListHistoryArchiveRecordsRequest {
+  int64 after_sequence = 1;
+  int32 limit = 2;
+}
+
+message ListHistoryArchiveRecordsResponse {
+  repeated HistoryArchiveRecord items = 1;
+}
+
+message OneTimePrekeyUpload {
+  string key_id = 1;
+  string algorithm = 2;
+  bytes public_key = 3;
+}
+
+message PublishPrekeyBundleRequest {
+  string signed_prekey_id = 1;
+  string signed_prekey_algorithm = 2;
+  bytes signed_prekey_public_key = 3;
+  repeated OneTimePrekeyUpload one_time_prekeys = 4;
+  bytes signed_prekey_signature = 5;
+  string signed_prekey_signature_algorithm = 6;
+}
+
+message AcquirePrekeyBundleRequest {
+  string username = 1;
+}
+
+message AcquirePrekeyBundlesRequest {
+  string username = 1;
+}
+
+message AcquirePrekeyBundlesResponse {
+  repeated PrekeyBundle items = 1;
+}
+
+message GetIdentityKeyRequest {
+  string username = 1;
+  string device_id = 2;
+}
+
+message GetIdentityKeysRequest {
+  repeated string usernames = 1;
+}
+
+message GetIdentityKeysResponse {
+  repeated IdentityKey items = 1;
+}
+
+message Conversation {
+  string conversation_id = 1;
+  string peer_username = 2;
+  Profile peer_profile = 3;
+  ConversationKind kind = 4;
+  string title = 5;
+  repeated string member_usernames = 6;
+  repeated ConversationMember members = 7;
+}
+
+message ListConversationsResponse {
+  repeated Conversation items = 1;
+}
+
+enum ConversationKind {
+  CONVERSATION_KIND_UNSPECIFIED = 0;
+  CONVERSATION_KIND_DIRECT = 1;
+  CONVERSATION_KIND_GROUP = 2;
+}
+
+message CreateGroupConversationRequest {
+  string title = 1;
+  repeated string member_usernames = 2;
+  GroupKeyUpdate initial_key = 3;
+}
+
+message AddGroupMembersRequest {
+  string conversation_id = 1;
+  repeated string member_usernames = 2;
+  GroupKeyUpdate next_key = 3;
+}
+
+message RemoveGroupMemberRequest {
+  string conversation_id = 1;
+  string username = 2;
+  GroupKeyUpdate next_key = 3;
+}
+
+message LeaveGroupConversationRequest {
+  string conversation_id = 1;
+  GroupKeyUpdate next_key = 2;
+}
+
+message TransferGroupAdminRequest {
+  string conversation_id = 1;
+  string username = 2;
+}
+
+enum ConversationRole {
+  CONVERSATION_ROLE_UNSPECIFIED = 0;
+  CONVERSATION_ROLE_ADMIN = 1;
+  CONVERSATION_ROLE_MEMBER = 2;
+}
+
+message ConversationMember {
+  string username = 1;
+  ConversationRole role = 2;
+  string added_by = 3;
+}
+
+message ConversationKeyEnvelope {
+  string username = 1;
+  bytes encrypted_key = 2;
+  bytes nonce = 3;
+  string sender_key_id = 4;
+  string recipient_key_id = 5;
+  string device_id = 6;
+}
+
+message DirectMessageEnvelope {
+  string target_username = 1;
+  string target_device_id = 2;
+  bytes ciphertext = 3;
+  bytes nonce = 4;
+  string recipient_signed_prekey_id = 5;
+  bytes recipient_signed_prekey_public = 6;
+  string recipient_one_time_prekey_id = 7;
+  bytes recipient_one_time_prekey_public = 8;
+  string e2ee_algorithm = 9;
+  bytes ratchet_public_key = 10;
+  int32 previous_chain_length = 11;
+  int32 message_number = 12;
+}
+
+message AttachmentDirectEnvelope {
+  string target_username = 1;
+  string target_device_id = 2;
+  bytes encrypted_descriptor = 3;
+  bytes descriptor_nonce = 4;
+  string recipient_signed_prekey_id = 5;
+  bytes recipient_signed_prekey_public = 6;
+  string recipient_one_time_prekey_id = 7;
+  bytes recipient_one_time_prekey_public = 8;
+  string e2ee_algorithm = 9;
+  bytes ratchet_public_key = 10;
+  int32 previous_chain_length = 11;
+  int32 message_number = 12;
+}
+
+message ConversationKey {
+  string conversation_id = 1;
+  int32 version = 2;
+  string algorithm = 3;
+  string created_by = 4;
+  repeated ConversationKeyEnvelope envelopes = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message GroupKeyUpdate {
+  int32 version = 1;
+  string algorithm = 2;
+  repeated ConversationKeyEnvelope envelopes = 3;
+  repeated HistoryArchiveRecord archive_records = 4;
+}
+
+message UpsertConversationKeyRequest {
+  string conversation_id = 1;
+  int32 version = 2;
+  string algorithm = 3;
+  repeated ConversationKeyEnvelope envelopes = 4;
+  repeated HistoryArchiveRecord archive_records = 5;
+}
+
+message GetConversationKeyRequest {
+  string conversation_id = 1;
+  int32 version = 2;
+}
+
+message Message {
+  int64 message_id = 1;
+  string conversation_id = 2;
+  string from = 3;
+  string to = 4;
+  string text = 5;
+  google.protobuf.Timestamp created_at = 6;
+  bytes ciphertext = 7;
+  bytes nonce = 8;
+  string sender_key_id = 9;
+  int32 conversation_key_version = 10;
+  bool encrypted = 11;
+  string recipient_signed_prekey_id = 12;
+  bytes recipient_signed_prekey_public = 13;
+  string recipient_one_time_prekey_id = 14;
+  bytes recipient_one_time_prekey_public = 15;
+  repeated Attachment attachments = 16;
+  string sender_device_id = 17;
+  string e2ee_algorithm = 18;
+  bytes ratchet_public_key = 19;
+  int32 previous_chain_length = 20;
+  int32 message_number = 21;
+}
+
+message SendMessageRequest {
+  string to = 1;
+  string text = 2;
+  string conversation_id = 3;
+  bytes ciphertext = 4;
+  bytes nonce = 5;
+  string sender_key_id = 6;
+  int32 conversation_key_version = 7;
+  bool encrypted = 8;
+  string recipient_signed_prekey_id = 9;
+  bytes recipient_signed_prekey_public = 10;
+  string recipient_one_time_prekey_id = 11;
+  bytes recipient_one_time_prekey_public = 12;
+  repeated Attachment attachments = 13;
+  repeated DirectMessageEnvelope direct_envelopes = 14;
+  repeated HistoryArchiveRecord archive_records = 15;
+}
+
+message GetMessagesRequest {
+  string conversation_id = 1;
+  string with_username = 2;
+  int32 limit = 3;
+}
+
+message GetMessagesResponse {
+  repeated Message items = 1;
+}
+
+message SearchMessagesRequest {
+  string query = 1;
+  int32 limit = 2;
+}
+
+message SearchMessagesResponse {
+  repeated Message items = 1;
+}
+
+message DeleteMessageRequest {
+  int64 message_id = 1;
+}
+
+enum AttachmentKind {
+  ATTACHMENT_KIND_UNSPECIFIED = 0;
+  ATTACHMENT_KIND_IMAGE = 1;
+  ATTACHMENT_KIND_VIDEO = 2;
+  ATTACHMENT_KIND_FILE = 3;
+}
+
+message AttachmentPreview {
+  int32 width = 1;
+  int32 height = 2;
+}
+
+message Attachment {
+  string attachment_id = 1;
+  AttachmentKind kind = 2;
+  string filename = 3;
+  string mime_type = 4;
+  int64 size_bytes = 5;
+  string media_id = 6;
+  bytes encrypted_descriptor = 7;
+  bytes descriptor_nonce = 8;
+  AttachmentPreview preview = 9;
+  bytes sha256 = 10;
+  int64 ciphertext_size = 11;
+  repeated AttachmentDirectEnvelope direct_envelopes = 12;
+}
+
+message PrepareMediaUploadRequest {
+  string filename = 1;
+  string mime_type = 2;
+  int64 size_bytes = 3;
+  AttachmentKind kind = 4;
+}
+
+message PrepareMediaUploadResponse {
+  string media_id = 1;
+  int64 max_size_bytes = 2;
+}
+
+message UploadMediaRequest {
+  string media_id = 1;
+  bytes ciphertext = 2;
+  bytes nonce = 3;
+  bytes sha256 = 4;
+  int64 size_bytes = 5;
+  string mime_type = 6;
+  string filename = 7;
+  AttachmentKind kind = 8;
+}
+
+message UploadMediaResponse {
+  string media_id = 1;
+}
+
+message GetMediaRequest {
+  string media_id = 1;
+}
+
+message GetMediaResponse {
+  string media_id = 1;
+  bytes ciphertext = 2;
+  bytes nonce = 3;
+  bytes sha256 = 4;
+  int64 size_bytes = 5;
+  string mime_type = 6;
+  string filename = 7;
+  AttachmentKind kind = 8;
+}
+
+message StreamEventsRequest {}
+
+message PresenceEvent {
+  repeated string online_users = 1;
+}
+
+message ProfileEvent {
+  Profile profile = 1;
+}
+
+message MessageDeletedEvent {
+  int64 message_id = 1;
+  string conversation_id = 2;
+}
+
+message ConversationRemovedEvent {
+  string conversation_id = 1;
+}
+
+message ServerEvent {
+  google.protobuf.Timestamp created_at = 1;
+  oneof payload {
+    PresenceEvent presence = 2;
+    Message message = 3;
+    ProfileEvent profile = 4;
+    MessageDeletedEvent message_deleted = 5;
+    Conversation conversation = 6;
+    ConversationRemovedEvent conversation_removed = 7;
+  }
+}

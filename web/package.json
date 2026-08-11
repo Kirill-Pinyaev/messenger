@@ -1,0 +1,31 @@
+{
+  "name": "web",
+  "version": "1.0.0",
+  "description": "grpc-web client for messenger",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run gen && vite build",
+    "gen": "mkdir -p ./src/gen && ../scripts/protoc.sh --plugin=protoc-gen-es=./node_modules/.bin/protoc-gen-es --plugin=protoc-gen-connect-es=./node_modules/.bin/protoc-gen-connect-es -I ../.tools/protoc-29.3/include -I ../api/proto --es_out=target=js:./src/gen --connect-es_out=target=js:./src/gen ../api/proto/messenger/v1/messenger.proto",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@bufbuild/protobuf": "^1.10.1",
+    "@connectrpc/connect": "^1.7.0",
+    "@connectrpc/connect-web": "^1.7.0",
+    "@noble/curves": "^2.2.0"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "^1.10.1",
+    "@connectrpc/protoc-gen-connect-es": "^1.7.0",
+    "@vitest/coverage-istanbul": "^4.1.7",
+    "vite": "^8.0.9",
+    "vitest": "^4.1.7"
+  }
+}
